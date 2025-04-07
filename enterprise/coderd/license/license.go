@@ -74,208 +74,214 @@ func LicensesEntitlements(
 	keys map[string]ed25519.PublicKey,
 	featureArguments FeatureArguments,
 ) (codersdk.Entitlements, error) {
-	// Default all entitlements to be disabled.
+	// Set a high user limit by default when bypassing license checks.
+	var defaultUserLimit int64 = 999999
+
 	entitlements := codersdk.Entitlements{
-		Features: map[codersdk.FeatureName]codersdk.Feature{
-			// always shows active user count regardless of license.
-			codersdk.FeatureUserLimit: {
-				Entitlement: codersdk.EntitlementNotEntitled,
-				Enabled:     enablements[codersdk.FeatureUserLimit],
-				Actual:      &featureArguments.ActiveUserCount,
-			},
-		},
-		Warnings: []string{},
-		Errors:   []string{},
+		HasLicense: true, // Assume a license exists
+		Features:   make(map[codersdk.FeatureName]codersdk.Feature),
+		Warnings:   []string{},
+		Errors:     []string{},
 	}
 
-	// By default, enumerate all features and set them to not entitled.
+	// Grant all features as entitled and enabled.
 	for _, featureName := range codersdk.FeatureNames {
-		entitlements.AddFeature(featureName, codersdk.Feature{
-			Entitlement: codersdk.EntitlementNotEntitled,
-			Enabled:     enablements[featureName],
-		})
+		feature := codersdk.Feature{
+			Entitlement: codersdk.EntitlementEntitled,
+			Enabled:     true, // Enable all features
+		}
+		if featureName == codersdk.FeatureUserLimit {
+			// Set a high user limit
+			feature.Limit = &defaultUserLimit
+			feature.Actual = &featureArguments.ActiveUserCount // Keep reporting actual count
+		} else {
+			// For other features, use the default enablement logic or always enable if applicable
+			feature.Enabled = enablements[featureName] || featureName.AlwaysEnable()
+		}
+		entitlements.AddFeature(featureName, feature)
 	}
 
-	// TODO: License specific warnings and errors should be tied to the license, not the
-	//   'Entitlements' group as a whole.
-	for _, license := range licenses {
-		claims, err := ParseClaims(license.JWT, keys)
-		var vErr *jwt.ValidationError
-		if xerrors.As(err, &vErr) && vErr.Is(jwt.ErrTokenNotValidYet) {
-			// The license isn't valid yet.  We don't consider any entitlements contained in it, but
-			// it's also not an error.  Just skip it silently.  This can happen if an administrator
-			// uploads a license for a new term that hasn't started yet.
-			continue
-		}
-		if err != nil {
-			entitlements.Errors = append(entitlements.Errors,
-				fmt.Sprintf("Invalid license (%s) parsing claims: %s", license.UUID.String(), err.Error()))
-			continue
-		}
-
-		// Any valid license should toggle this boolean
-		entitlements.HasLicense = true
-
-		// If any license requires telemetry, the deployment should require telemetry.
-		entitlements.RequireTelemetry = entitlements.RequireTelemetry || claims.RequireTelemetry
-
-		// entitlement is the highest entitlement for any features in this license.
-		entitlement := codersdk.EntitlementEntitled
-		// If any license is a trial license, this should be set to true.
-		// The user should delete the trial license to remove this.
-		entitlements.Trial = claims.Trial
-		if now.After(claims.LicenseExpires.Time) {
-			// if the grace period were over, the validation fails, so if we are after
-			// LicenseExpires we must be in grace period.
-			entitlement = codersdk.EntitlementGracePeriod
-		}
-
-		// Will add a warning if the license is expiring soon.
-		// This warning can be raised multiple times if there is more than 1 license.
-		licenseExpirationWarning(&entitlements, now, claims)
-
-		// 'claims.AllFeature' is the legacy way to set 'claims.FeatureSet = codersdk.FeatureSetEnterprise'
-		// If both are set, ignore the legacy 'claims.AllFeature'
-		if claims.AllFeatures && claims.FeatureSet == "" {
-			claims.FeatureSet = codersdk.FeatureSetEnterprise
-		}
-
-		// Add all features from the feature set defined.
-		for _, featureName := range claims.FeatureSet.Features() {
-			if featureName == codersdk.FeatureUserLimit {
-				// FeatureUserLimit is unique in that it must be specifically defined
-				// in the license. There is no default meaning if no "limit" is set.
+	// Bypass all license parsing and checking logic below.
+	/*
+		for _, license := range licenses {
+			claims, err := ParseClaims(license.JWT, keys)
+			var vErr *jwt.ValidationError
+			if xerrors.As(err, &vErr) && vErr.Is(jwt.ErrTokenNotValidYet) {
+				// The license isn't valid yet.  We don't consider any entitlements contained in it, but
+				// it's also not an error.  Just skip it silently.  This can happen if an administrator
+				// uploads a license for a new term that hasn't started yet.
 				continue
 			}
-			entitlements.AddFeature(featureName, codersdk.Feature{
-				Entitlement: entitlement,
-				Enabled:     enablements[featureName] || featureName.AlwaysEnable(),
-				Limit:       nil,
-				Actual:      nil,
-			})
-		}
-
-		// Features al-la-carte
-		for featureName, featureValue := range claims.Features {
-			// Can this be negative?
-			if featureValue <= 0 {
+			if err != nil {
+				entitlements.Errors = append(entitlements.Errors,
+					fmt.Sprintf("Invalid license (%s) parsing claims: %s", license.UUID.String(), err.Error()))
 				continue
 			}
 
-			switch featureName {
-			case codersdk.FeatureUserLimit:
-				// User limit has special treatment as our only non-boolean feature.
-				limit := featureValue
-				entitlements.AddFeature(codersdk.FeatureUserLimit, codersdk.Feature{
-					Enabled:     true,
-					Entitlement: entitlement,
-					Limit:       &limit,
-					Actual:      &featureArguments.ActiveUserCount,
-				})
-			default:
-				entitlements.Features[featureName] = codersdk.Feature{
+			// Any valid license should toggle this boolean
+			entitlements.HasLicense = true
+
+			// If any license requires telemetry, the deployment should require telemetry.
+			entitlements.RequireTelemetry = entitlements.RequireTelemetry || claims.RequireTelemetry
+
+			// entitlement is the highest entitlement for any features in this license.
+			entitlement := codersdk.EntitlementEntitled
+			// If any license is a trial license, this should be set to true.
+			// The user should delete the trial license to remove this.
+			entitlements.Trial = claims.Trial
+			if now.After(claims.LicenseExpires.Time) {
+				// if the grace period were over, the validation fails, so if we are after
+				// LicenseExpires we must be in grace period.
+				entitlement = codersdk.EntitlementGracePeriod
+			}
+
+			// Will add a warning if the license is expiring soon.
+			// This warning can be raised multiple times if there is more than 1 license.
+			licenseExpirationWarning(&entitlements, now, claims)
+
+			// 'claims.AllFeature' is the legacy way to set 'claims.FeatureSet = codersdk.FeatureSetEnterprise'
+			// If both are set, ignore the legacy 'claims.AllFeature'
+			if claims.AllFeatures && claims.FeatureSet == "" {
+				claims.FeatureSet = codersdk.FeatureSetEnterprise
+			}
+
+			// Add all features from the feature set defined.
+			for _, featureName := range claims.FeatureSet.Features() {
+				if featureName == codersdk.FeatureUserLimit {
+					// FeatureUserLimit is unique in that it must be specifically defined
+					// in the license. There is no default meaning if no "limit" is set.
+					continue
+				}
+				entitlements.AddFeature(featureName, codersdk.Feature{
 					Entitlement: entitlement,
 					Enabled:     enablements[featureName] || featureName.AlwaysEnable(),
+					Limit:       nil,
+					Actual:      nil,
+				})
+			}
+
+			// Features al-la-carte
+			for featureName, featureValue := range claims.Features {
+				// Can this be negative?
+				if featureValue <= 0 {
+					continue
+				}
+
+				switch featureName {
+				case codersdk.FeatureUserLimit:
+					// User limit has special treatment as our only non-boolean feature.
+					limit := featureValue
+					entitlements.AddFeature(codersdk.FeatureUserLimit, codersdk.Feature{
+						Enabled:     true,
+						Entitlement: entitlement,
+						Limit:       &limit,
+						Actual:      &featureArguments.ActiveUserCount,
+					})
+				default:
+					entitlements.Features[featureName] = codersdk.Feature{
+						Entitlement: entitlement,
+						Enabled:     enablements[featureName] || featureName.AlwaysEnable(),
+					}
 				}
 			}
 		}
-	}
 
-	// Now the license specific warnings and errors are added to the entitlements.
+		// Now the license specific warnings and errors are added to the entitlements.
 
-	// If HA is enabled, ensure the feature is entitled.
-	if featureArguments.ReplicaCount > 1 {
-		feature := entitlements.Features[codersdk.FeatureHighAvailability]
+		// If HA is enabled, ensure the feature is entitled.
+		if featureArguments.ReplicaCount > 1 {
+			feature := entitlements.Features[codersdk.FeatureHighAvailability]
 
-		switch feature.Entitlement {
-		case codersdk.EntitlementNotEntitled:
-			if entitlements.HasLicense {
-				entitlements.Errors = append(entitlements.Errors,
-					"You have multiple replicas but your license is not entitled to high availability. You will be unable to connect to workspaces.")
-			} else {
-				entitlements.Errors = append(entitlements.Errors,
-					"You have multiple replicas but high availability is an Enterprise feature. You will be unable to connect to workspaces.")
-			}
-		case codersdk.EntitlementGracePeriod:
-			entitlements.Warnings = append(entitlements.Warnings,
-				"You have multiple replicas but your license for high availability is expired. Reduce to one replica or workspace connections will stop working.")
-		}
-	}
-
-	if featureArguments.ExternalAuthCount > 1 {
-		feature := entitlements.Features[codersdk.FeatureMultipleExternalAuth]
-
-		switch feature.Entitlement {
-		case codersdk.EntitlementNotEntitled:
-			if entitlements.HasLicense {
-				entitlements.Errors = append(entitlements.Errors,
-					"You have multiple External Auth Providers configured but your license is limited at one.",
-				)
-			} else {
-				entitlements.Errors = append(entitlements.Errors,
-					"You have multiple External Auth Providers configured but this is an Enterprise feature. Reduce to one.",
-				)
-			}
-		case codersdk.EntitlementGracePeriod:
-			entitlements.Warnings = append(entitlements.Warnings,
-				"You have multiple External Auth Providers configured but your license is expired. Reduce to one.",
-			)
-		}
-	}
-
-	if entitlements.HasLicense {
-		userLimit := entitlements.Features[codersdk.FeatureUserLimit]
-		if userLimit.Limit != nil && featureArguments.ActiveUserCount > *userLimit.Limit {
-			entitlements.Warnings = append(entitlements.Warnings, fmt.Sprintf(
-				"Your deployment has %d active users but is only licensed for %d.",
-				featureArguments.ActiveUserCount, *userLimit.Limit))
-		} else if userLimit.Limit != nil && userLimit.Entitlement == codersdk.EntitlementGracePeriod {
-			entitlements.Warnings = append(entitlements.Warnings, fmt.Sprintf(
-				"Your deployment has %d active users but the license with the limit %d is expired.",
-				featureArguments.ActiveUserCount, *userLimit.Limit))
-		}
-
-		// Add a warning for every feature that is enabled but not entitled or
-		// is in a grace period.
-		for _, featureName := range codersdk.FeatureNames {
-			// The user limit has it's own warnings!
-			if featureName == codersdk.FeatureUserLimit {
-				continue
-			}
-			// High availability has it's own warnings based on replica count!
-			if featureName == codersdk.FeatureHighAvailability {
-				continue
-			}
-			// External Auth Providers auth has it's own warnings based on the number configured!
-			if featureName == codersdk.FeatureMultipleExternalAuth {
-				continue
-			}
-
-			feature := entitlements.Features[featureName]
-			if !feature.Enabled {
-				continue
-			}
-			niceName := featureName.Humanize()
 			switch feature.Entitlement {
 			case codersdk.EntitlementNotEntitled:
-				entitlements.Warnings = append(entitlements.Warnings,
-					fmt.Sprintf("%s is enabled but your license is not entitled to this feature.", niceName))
+				if entitlements.HasLicense {
+					entitlements.Errors = append(entitlements.Errors,
+						"You have multiple replicas but your license is not entitled to high availability. You will be unable to connect to workspaces.")
+				} else {
+					entitlements.Errors = append(entitlements.Errors,
+						"You have multiple replicas but high availability is an Enterprise feature. You will be unable to connect to workspaces.")
+				}
 			case codersdk.EntitlementGracePeriod:
 				entitlements.Warnings = append(entitlements.Warnings,
-					fmt.Sprintf("%s is enabled but your license for this feature is expired.", niceName))
-			default:
+					"You have multiple replicas but your license for high availability is expired. Reduce to one replica or workspace connections will stop working.")
 			}
 		}
-	}
 
-	// Wrap up by disabling all features that are not entitled.
-	for _, featureName := range codersdk.FeatureNames {
-		feature := entitlements.Features[featureName]
-		if feature.Entitlement == codersdk.EntitlementNotEntitled {
-			feature.Enabled = false
-			entitlements.Features[featureName] = feature
+		if featureArguments.ExternalAuthCount > 1 {
+			feature := entitlements.Features[codersdk.FeatureMultipleExternalAuth]
+
+			switch feature.Entitlement {
+			case codersdk.EntitlementNotEntitled:
+				if entitlements.HasLicense {
+					entitlements.Errors = append(entitlements.Errors,
+						"You have multiple External Auth Providers configured but your license is limited at one.",
+					)
+				} else {
+					entitlements.Errors = append(entitlements.Errors,
+						"You have multiple External Auth Providers configured but this is an Enterprise feature. Reduce to one.",
+					)
+				}
+			case codersdk.EntitlementGracePeriod:
+				entitlements.Warnings = append(entitlements.Warnings,
+					"You have multiple External Auth Providers configured but your license is expired. Reduce to one.",
+				)
+			}
 		}
-	}
+
+		if entitlements.HasLicense {
+			userLimit := entitlements.Features[codersdk.FeatureUserLimit]
+			if userLimit.Limit != nil && featureArguments.ActiveUserCount > *userLimit.Limit {
+				entitlements.Warnings = append(entitlements.Warnings, fmt.Sprintf(
+					"Your deployment has %d active users but is only licensed for %d.",
+					featureArguments.ActiveUserCount, *userLimit.Limit))
+			} else if userLimit.Limit != nil && userLimit.Entitlement == codersdk.EntitlementGracePeriod {
+				entitlements.Warnings = append(entitlements.Warnings, fmt.Sprintf(
+					"Your deployment has %d active users but the license with the limit %d is expired.",
+					featureArguments.ActiveUserCount, *userLimit.Limit))
+			}
+
+			// Add a warning for every feature that is enabled but not entitled or
+			// is in a grace period.
+			for _, featureName := range codersdk.FeatureNames {
+				// The user limit has it's own warnings!
+				if featureName == codersdk.FeatureUserLimit {
+					continue
+				}
+				// High availability has it's own warnings based on replica count!
+				if featureName == codersdk.FeatureHighAvailability {
+					continue
+				}
+				// External Auth Providers auth has it's own warnings based on the number configured!
+				if featureName == codersdk.FeatureMultipleExternalAuth {
+					continue
+				}
+
+				feature := entitlements.Features[featureName]
+				if !feature.Enabled {
+					continue
+				}
+				niceName := featureName.Humanize()
+				switch feature.Entitlement {
+				case codersdk.EntitlementNotEntitled:
+					entitlements.Warnings = append(entitlements.Warnings,
+						fmt.Sprintf("%s is enabled but your license is not entitled to this feature.", niceName))
+				case codersdk.EntitlementGracePeriod:
+					entitlements.Warnings = append(entitlements.Warnings,
+						fmt.Sprintf("%s is enabled but your license for this feature is expired.", niceName))
+				default:
+				}
+			}
+		}
+
+		// Wrap up by disabling all features that are not entitled.
+		for _, featureName := range codersdk.FeatureNames {
+			feature := entitlements.Features[featureName]
+			if feature.Entitlement == codersdk.EntitlementNotEntitled {
+				feature.Enabled = false
+				entitlements.Features[featureName] = feature
+			}
+		}
+	*/
 	entitlements.RefreshedAt = now
 
 	return entitlements, nil
