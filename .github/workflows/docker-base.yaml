@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - sjcf
     paths:
       - scripts/Dockerfile.base
       - scripts/Dockerfile
