@@ -1,5 +1,5 @@
 {
-	"_comment": "This version doesn't matter, it's just to allow importing from other repos.",
+	"_comment": "This version doesn't matter, it's just to allow importing from other repos. Oh .",
 	"name": "coder",
 	"version": "0.0.0",
 	"packageManager": "pnpm@9.14.4",
