@@ -2570,6 +2570,23 @@ type AuditLog struct {
 	ResourceIcon     string          `db:"resource_icon" json:"resource_icon"`
 }
 
+type Chat struct {
+	ID        uuid.UUID `db:"id" json:"id"`
+	OwnerID   uuid.UUID `db:"owner_id" json:"owner_id"`
+	CreatedAt time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt time.Time `db:"updated_at" json:"updated_at"`
+	Title     string    `db:"title" json:"title"`
+}
+
+type ChatMessage struct {
+	ID        int64           `db:"id" json:"id"`
+	ChatID    uuid.UUID       `db:"chat_id" json:"chat_id"`
+	CreatedAt time.Time       `db:"created_at" json:"created_at"`
+	Model     string          `db:"model" json:"model"`
+	Provider  string          `db:"provider" json:"provider"`
+	Content   json.RawMessage `db:"content" json:"content"`
+}
+
 type CryptoKey struct {
 	Feature     CryptoKeyFeature `db:"feature" json:"feature"`
 	Sequence    int32            `db:"sequence" json:"sequence"`
@@ -3579,16 +3596,14 @@ type WorkspaceAppStat struct {
 }
 
 type WorkspaceAppStatus struct {
-	ID                 uuid.UUID               `db:"id" json:"id"`
-	CreatedAt          time.Time               `db:"created_at" json:"created_at"`
-	AgentID            uuid.UUID               `db:"agent_id" json:"agent_id"`
-	AppID              uuid.UUID               `db:"app_id" json:"app_id"`
-	WorkspaceID        uuid.UUID               `db:"workspace_id" json:"workspace_id"`
-	State              WorkspaceAppStatusState `db:"state" json:"state"`
-	NeedsUserAttention bool                    `db:"needs_user_attention" json:"needs_user_attention"`
-	Message            string                  `db:"message" json:"message"`
-	Uri                sql.NullString          `db:"uri" json:"uri"`
-	Icon               sql.NullString          `db:"icon" json:"icon"`
+	ID          uuid.UUID               `db:"id" json:"id"`
+	CreatedAt   time.Time               `db:"created_at" json:"created_at"`
+	AgentID     uuid.UUID               `db:"agent_id" json:"agent_id"`
+	AppID       uuid.UUID               `db:"app_id" json:"app_id"`
+	WorkspaceID uuid.UUID               `db:"workspace_id" json:"workspace_id"`
+	State       WorkspaceAppStatusState `db:"state" json:"state"`
+	Message     string                  `db:"message" json:"message"`
+	Uri         sql.NullString          `db:"uri" json:"uri"`
 }
 
 // Joins in the username + avatar url of the initiated by user.

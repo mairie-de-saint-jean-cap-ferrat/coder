@@ -25,6 +25,7 @@ import (
 	"github.com/coder/coder/v2/coderd/database"
 	"github.com/coder/coder/v2/coderd/database/dbtime"
 	"github.com/coder/coder/v2/coderd/httpapi/httpapiconstraints"
+	"github.com/coder/coder/v2/coderd/httpmw/loggermw"
 	"github.com/coder/coder/v2/coderd/rbac"
 	"github.com/coder/coder/v2/coderd/util/slice"
 	"github.com/coder/coder/v2/provisionersdk"
@@ -163,6 +164,7 @@ func ActorFromContext(ctx context.Context) (rbac.Subject, bool) {
 
 var (
 	subjectProvisionerd = rbac.Subject{
+		Type:         rbac.SubjectTypeProvisionerd,
 		FriendlyName: "Provisioner Daemon",
 		ID:           uuid.Nil.String(),
 		Roles: rbac.Roles([]rbac.Role{
@@ -197,6 +199,7 @@ var (
 	}.WithCachedASTValue()
 
 	subjectAutostart = rbac.Subject{
+		Type:         rbac.SubjectTypeAutostart,
 		FriendlyName: "Autostart",
 		ID:           uuid.Nil.String(),
 		Roles: rbac.Roles([]rbac.Role{
@@ -220,6 +223,7 @@ var (
 
 	// See unhanger package.
 	subjectHangDetector = rbac.Subject{
+		Type:         rbac.SubjectTypeHangDetector,
 		FriendlyName: "Hang Detector",
 		ID:           uuid.Nil.String(),
 		Roles: rbac.Roles([]rbac.Role{
@@ -240,6 +244,7 @@ var (
 
 	// See cryptokeys package.
 	subjectCryptoKeyRotator = rbac.Subject{
+		Type:         rbac.SubjectTypeCryptoKeyRotator,
 		FriendlyName: "Crypto Key Rotator",
 		ID:           uuid.Nil.String(),
 		Roles: rbac.Roles([]rbac.Role{
@@ -258,6 +263,7 @@ var (
 
 	// See cryptokeys package.
 	subjectCryptoKeyReader = rbac.Subject{
+		Type:         rbac.SubjectTypeCryptoKeyReader,
 		FriendlyName: "Crypto Key Reader",
 		ID:           uuid.Nil.String(),
 		Roles: rbac.Roles([]rbac.Role{
@@ -275,6 +281,7 @@ var (
 	}.WithCachedASTValue()
 
 	subjectNotifier = rbac.Subject{
+		Type:         rbac.SubjectTypeNotifier,
 		FriendlyName: "Notifier",
 		ID:           uuid.Nil.String(),
 		Roles: rbac.Roles([]rbac.Role{
@@ -295,6 +302,7 @@ var (
 	}.WithCachedASTValue()
 
 	subjectResourceMonitor = rbac.Subject{
+		Type:         rbac.SubjectTypeResourceMonitor,
 		FriendlyName: "Resource Monitor",
 		ID:           uuid.Nil.String(),
 		Roles: rbac.Roles([]rbac.Role{
@@ -313,6 +321,7 @@ var (
 	}.WithCachedASTValue()
 
 	subjectSystemRestricted = rbac.Subject{
+		Type:         rbac.SubjectTypeSystemRestricted,
 		FriendlyName: "System",
 		ID:           uuid.Nil.String(),
 		Roles: rbac.Roles([]rbac.Role{
@@ -347,6 +356,7 @@ var (
 	}.WithCachedASTValue()
 
 	subjectSystemReadProvisionerDaemons = rbac.Subject{
+		Type:         rbac.SubjectTypeSystemReadProvisionerDaemons,
 		FriendlyName: "Provisioner Daemons Reader",
 		ID:           uuid.Nil.String(),
 		Roles: rbac.Roles([]rbac.Role{
@@ -364,6 +374,7 @@ var (
 	}.WithCachedASTValue()
 
 	subjectPrebuildsOrchestrator = rbac.Subject{
+		Type:         rbac.SubjectTypePrebuildsOrchestrator,
 		FriendlyName: "Prebuilds Orchestrator",
 		ID:           prebuilds.SystemUserID.String(),
 		Roles: rbac.Roles([]rbac.Role{
@@ -388,59 +399,59 @@ var (
 // AsProvisionerd returns a context with an actor that has permissions required
 // for provisionerd to function.
 func AsProvisionerd(ctx context.Context) context.Context {
-	return context.WithValue(ctx, authContextKey{}, subjectProvisionerd)
+	return As(ctx, subjectProvisionerd)
 }
 
 // AsAutostart returns a context with an actor that has permissions required
 // for autostart to function.
 func AsAutostart(ctx context.Context) context.Context {
-	return context.WithValue(ctx, authContextKey{}, subjectAutostart)
+	return As(ctx, subjectAutostart)
 }
 
 // AsHangDetector returns a context with an actor that has permissions required
 // for unhanger.Detector to function.
 func AsHangDetector(ctx context.Context) context.Context {
-	return context.WithValue(ctx, authContextKey{}, subjectHangDetector)
+	return As(ctx, subjectHangDetector)
 }
 
 // AsKeyRotator returns a context with an actor that has permissions required for rotating crypto keys.
 func AsKeyRotator(ctx context.Context) context.Context {
-	return context.WithValue(ctx, authContextKey{}, subjectCryptoKeyRotator)
+	return As(ctx, subjectCryptoKeyRotator)
 }
 
 // AsKeyReader returns a context with an actor that has permissions required for reading crypto keys.
 func AsKeyReader(ctx context.Context) context.Context {
-	return context.WithValue(ctx, authContextKey{}, subjectCryptoKeyReader)
+	return As(ctx, subjectCryptoKeyReader)
 }
 
 // AsNotifier returns a context with an actor that has permissions required for
 // creating/reading/updating/deleting notifications.
 func AsNotifier(ctx context.Context) context.Context {
-	return context.WithValue(ctx, authContextKey{}, subjectNotifier)
+	return As(ctx, subjectNotifier)
 }
 
 // AsResourceMonitor returns a context with an actor that has permissions required for
 // updating resource monitors.
 func AsResourceMonitor(ctx context.Context) context.Context {
-	return context.WithValue(ctx, authContextKey{}, subjectResourceMonitor)
+	return As(ctx, subjectResourceMonitor)
 }
 
 // AsSystemRestricted returns a context with an actor that has permissions
 // required for various system operations (login, logout, metrics cache).
 func AsSystemRestricted(ctx context.Context) context.Context {
-	return context.WithValue(ctx, authContextKey{}, subjectSystemRestricted)
+	return As(ctx, subjectSystemRestricted)
 }
 
 // AsSystemReadProvisionerDaemons returns a context with an actor that has permissions
 // to read provisioner daemons.
 func AsSystemReadProvisionerDaemons(ctx context.Context) context.Context {
-	return context.WithValue(ctx, authContextKey{}, subjectSystemReadProvisionerDaemons)
+	return As(ctx, subjectSystemReadProvisionerDaemons)
 }
 
 // AsPrebuildsOrchestrator returns a context with an actor that has permissions
 // to read orchestrator workspace prebuilds.
 func AsPrebuildsOrchestrator(ctx context.Context) context.Context {
-	return context.WithValue(ctx, authContextKey{}, subjectPrebuildsOrchestrator)
+	return As(ctx, subjectPrebuildsOrchestrator)
 }
 
 var AsRemoveActor = rbac.Subject{
@@ -457,6 +468,9 @@ func As(ctx context.Context, actor rbac.Subject) context.Context {
 		// AsRemoveActor is a special case that is used to indicate that the actor
 		// should be removed from the context.
 		return context.WithValue(ctx, authContextKey{}, nil)
+	}
+	if rlogger := loggermw.RequestLoggerFromContext(ctx); rlogger != nil {
+		rlogger.WithAuthContext(actor)
 	}
 	return context.WithValue(ctx, authContextKey{}, actor)
 }
@@ -1255,6 +1269,10 @@ func (q *querier) DeleteApplicationConnectAPIKeysByUserID(ctx context.Context, u
 	return q.db.DeleteApplicationConnectAPIKeysByUserID(ctx, userID)
 }
 
+func (q *querier) DeleteChat(ctx context.Context, id uuid.UUID) error {
+	return deleteQ(q.log, q.auth, q.db.GetChatByID, q.db.DeleteChat)(ctx, id)
+}
+
 func (q *querier) DeleteCoordinator(ctx context.Context, id uuid.UUID) error {
 	if err := q.authorizeContext(ctx, policy.ActionDelete, rbac.ResourceTailnetCoordinator); err != nil {
 		return err
@@ -1672,6 +1690,22 @@ func (q *querier) GetAuthorizationUserRoles(ctx context.Context, userID uuid.UUI
 	return q.db.GetAuthorizationUserRoles(ctx, userID)
 }
 
+func (q *querier) GetChatByID(ctx context.Context, id uuid.UUID) (database.Chat, error) {
+	return fetch(q.log, q.auth, q.db.GetChatByID)(ctx, id)
+}
+
+func (q *querier) GetChatMessagesByChatID(ctx context.Context, chatID uuid.UUID) ([]database.ChatMessage, error) {
+	c, err := q.GetChatByID(ctx, chatID)
+	if err != nil {
+		return nil, err
+	}
+	return q.db.GetChatMessagesByChatID(ctx, c.ID)
+}
+
+func (q *querier) GetChatsByOwnerID(ctx context.Context, ownerID uuid.UUID) ([]database.Chat, error) {
+	return fetchWithPostFilter(q.auth, policy.ActionRead, q.db.GetChatsByOwnerID)(ctx, ownerID)
+}
+
 func (q *querier) GetCoordinatorResumeTokenSigningKey(ctx context.Context) (string, error) {
 	if err := q.authorizeContext(ctx, policy.ActionRead, rbac.ResourceSystem); err != nil {
 		return "", err
@@ -1893,13 +1927,6 @@ func (q *querier) GetInboxNotificationByID(ctx context.Context, id uuid.UUID) (d
 
 func (q *querier) GetInboxNotificationsByUserID(ctx context.Context, userID database.GetInboxNotificationsByUserIDParams) ([]database.InboxNotification, error) {
 	return fetchWithPostFilter(q.auth, policy.ActionRead, q.db.GetInboxNotificationsByUserID)(ctx, userID)
-}
-
-func (q *querier) GetJFrogXrayScanByWorkspaceAndAgentID(ctx context.Context, arg database.GetJFrogXrayScanByWorkspaceAndAgentIDParams) (database.JfrogXrayScan, error) {
-	if _, err := fetch(q.log, q.auth, q.db.GetWorkspaceByID)(ctx, arg.WorkspaceID); err != nil {
-		return database.JfrogXrayScan{}, err
-	}
-	return q.db.GetJFrogXrayScanByWorkspaceAndAgentID(ctx, arg)
 }
 
 func (q *querier) GetLastUpdateCheck(ctx context.Context) (string, error) {
@@ -2187,14 +2214,24 @@ func (q *querier) GetPresetByWorkspaceBuildID(ctx context.Context, workspaceID u
 	return q.db.GetPresetByWorkspaceBuildID(ctx, workspaceID)
 }
 
-func (q *querier) GetPresetParametersByTemplateVersionID(ctx context.Context, templateVersionID uuid.UUID) ([]database.TemplateVersionPresetParameter, error) {
+func (q *querier) GetPresetParametersByPresetID(ctx context.Context, presetID uuid.UUID) ([]database.TemplateVersionPresetParameter, error) {
 	// An actor can read template version presets if they can read the related template version.
-	_, err := q.GetTemplateVersionByID(ctx, templateVersionID)
+	_, err := q.GetPresetByID(ctx, presetID)
 	if err != nil {
 		return nil, err
 	}
 
-	return q.db.GetPresetParametersByTemplateVersionID(ctx, templateVersionID)
+	return q.db.GetPresetParametersByPresetID(ctx, presetID)
+}
+
+func (q *querier) GetPresetParametersByTemplateVersionID(ctx context.Context, args uuid.UUID) ([]database.TemplateVersionPresetParameter, error) {
+	// An actor can read template version presets if they can read the related template version.
+	_, err := q.GetTemplateVersionByID(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+
+	return q.db.GetPresetParametersByTemplateVersionID(ctx, args)
 }
 
 func (q *querier) GetPresetsBackoff(ctx context.Context, lookback time.Time) ([]database.GetPresetsBackoffRow, error) {
@@ -2711,17 +2748,6 @@ func (q *querier) GetUserActivityInsights(ctx context.Context, arg database.GetU
 	return q.db.GetUserActivityInsights(ctx, arg)
 }
 
-func (q *querier) GetUserAppearanceSettings(ctx context.Context, userID uuid.UUID) (string, error) {
-	u, err := q.db.GetUserByID(ctx, userID)
-	if err != nil {
-		return "", err
-	}
-	if err := q.authorizeContext(ctx, policy.ActionReadPersonal, u); err != nil {
-		return "", err
-	}
-	return q.db.GetUserAppearanceSettings(ctx, userID)
-}
-
 func (q *querier) GetUserByEmailOrUsername(ctx context.Context, arg database.GetUserByEmailOrUsernameParams) (database.User, error) {
 	return fetch(q.log, q.auth, q.db.GetUserByEmailOrUsername)(ctx, arg)
 }
@@ -2792,6 +2818,28 @@ func (q *querier) GetUserStatusCounts(ctx context.Context, arg database.GetUserS
 		return nil, err
 	}
 	return q.db.GetUserStatusCounts(ctx, arg)
+}
+
+func (q *querier) GetUserTerminalFont(ctx context.Context, userID uuid.UUID) (string, error) {
+	u, err := q.db.GetUserByID(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	if err := q.authorizeContext(ctx, policy.ActionReadPersonal, u); err != nil {
+		return "", err
+	}
+	return q.db.GetUserTerminalFont(ctx, userID)
+}
+
+func (q *querier) GetUserThemePreference(ctx context.Context, userID uuid.UUID) (string, error) {
+	u, err := q.db.GetUserByID(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	if err := q.authorizeContext(ctx, policy.ActionReadPersonal, u); err != nil {
+		return "", err
+	}
+	return q.db.GetUserThemePreference(ctx, userID)
 }
 
 func (q *querier) GetUserWorkspaceBuildParameters(ctx context.Context, params database.GetUserWorkspaceBuildParametersParams) ([]database.GetUserWorkspaceBuildParametersRow, error) {
@@ -3285,6 +3333,21 @@ func (q *querier) InsertAllUsersGroup(ctx context.Context, organizationID uuid.U
 
 func (q *querier) InsertAuditLog(ctx context.Context, arg database.InsertAuditLogParams) (database.AuditLog, error) {
 	return insert(q.log, q.auth, rbac.ResourceAuditLog, q.db.InsertAuditLog)(ctx, arg)
+}
+
+func (q *querier) InsertChat(ctx context.Context, arg database.InsertChatParams) (database.Chat, error) {
+	return insert(q.log, q.auth, rbac.ResourceChat.WithOwner(arg.OwnerID.String()), q.db.InsertChat)(ctx, arg)
+}
+
+func (q *querier) InsertChatMessages(ctx context.Context, arg database.InsertChatMessagesParams) ([]database.ChatMessage, error) {
+	c, err := q.db.GetChatByID(ctx, arg.ChatID)
+	if err != nil {
+		return nil, err
+	}
+	if err := q.authorizeContext(ctx, policy.ActionUpdate, c); err != nil {
+		return nil, err
+	}
+	return q.db.InsertChatMessages(ctx, arg)
 }
 
 func (q *querier) InsertCryptoKey(ctx context.Context, arg database.InsertCryptoKeyParams) (database.CryptoKey, error) {
@@ -3935,6 +3998,13 @@ func (q *querier) UpdateAPIKeyByID(ctx context.Context, arg database.UpdateAPIKe
 	return update(q.log, q.auth, fetch, q.db.UpdateAPIKeyByID)(ctx, arg)
 }
 
+func (q *querier) UpdateChatByID(ctx context.Context, arg database.UpdateChatByIDParams) error {
+	fetch := func(ctx context.Context, arg database.UpdateChatByIDParams) (database.Chat, error) {
+		return q.db.GetChatByID(ctx, arg.ID)
+	}
+	return update(q.log, q.auth, fetch, q.db.UpdateChatByID)(ctx, arg)
+}
+
 func (q *querier) UpdateCryptoKeyDeletesAt(ctx context.Context, arg database.UpdateCryptoKeyDeletesAtParams) (database.CryptoKey, error) {
 	if err := q.authorizeContext(ctx, policy.ActionUpdate, rbac.ResourceCryptoKey); err != nil {
 		return database.CryptoKey{}, err
@@ -4311,17 +4381,6 @@ func (q *querier) UpdateTemplateWorkspacesLastUsedAt(ctx context.Context, arg da
 	return fetchAndExec(q.log, q.auth, policy.ActionUpdate, fetch, q.db.UpdateTemplateWorkspacesLastUsedAt)(ctx, arg)
 }
 
-func (q *querier) UpdateUserAppearanceSettings(ctx context.Context, arg database.UpdateUserAppearanceSettingsParams) (database.UserConfig, error) {
-	u, err := q.db.GetUserByID(ctx, arg.UserID)
-	if err != nil {
-		return database.UserConfig{}, err
-	}
-	if err := q.authorizeContext(ctx, policy.ActionUpdatePersonal, u); err != nil {
-		return database.UserConfig{}, err
-	}
-	return q.db.UpdateUserAppearanceSettings(ctx, arg)
-}
-
 func (q *querier) UpdateUserDeletedByID(ctx context.Context, id uuid.UUID) error {
 	return deleteQ(q.log, q.auth, q.db.GetUserByID, q.db.UpdateUserDeletedByID)(ctx, id)
 }
@@ -4457,6 +4516,28 @@ func (q *querier) UpdateUserStatus(ctx context.Context, arg database.UpdateUserS
 		return q.db.GetUserByID(ctx, arg.ID)
 	}
 	return updateWithReturn(q.log, q.auth, fetch, q.db.UpdateUserStatus)(ctx, arg)
+}
+
+func (q *querier) UpdateUserTerminalFont(ctx context.Context, arg database.UpdateUserTerminalFontParams) (database.UserConfig, error) {
+	u, err := q.db.GetUserByID(ctx, arg.UserID)
+	if err != nil {
+		return database.UserConfig{}, err
+	}
+	if err := q.authorizeContext(ctx, policy.ActionUpdatePersonal, u); err != nil {
+		return database.UserConfig{}, err
+	}
+	return q.db.UpdateUserTerminalFont(ctx, arg)
+}
+
+func (q *querier) UpdateUserThemePreference(ctx context.Context, arg database.UpdateUserThemePreferenceParams) (database.UserConfig, error) {
+	u, err := q.db.GetUserByID(ctx, arg.UserID)
+	if err != nil {
+		return database.UserConfig{}, err
+	}
+	if err := q.authorizeContext(ctx, policy.ActionUpdatePersonal, u); err != nil {
+		return database.UserConfig{}, err
+	}
+	return q.db.UpdateUserThemePreference(ctx, arg)
 }
 
 func (q *querier) UpdateVolumeResourceMonitor(ctx context.Context, arg database.UpdateVolumeResourceMonitorParams) error {
@@ -4733,27 +4814,6 @@ func (q *querier) UpsertHealthSettings(ctx context.Context, value string) error 
 		return err
 	}
 	return q.db.UpsertHealthSettings(ctx, value)
-}
-
-func (q *querier) UpsertJFrogXrayScanByWorkspaceAndAgentID(ctx context.Context, arg database.UpsertJFrogXrayScanByWorkspaceAndAgentIDParams) error {
-	// TODO: Having to do all this extra querying makes me a sad panda.
-	workspace, err := q.db.GetWorkspaceByID(ctx, arg.WorkspaceID)
-	if err != nil {
-		return xerrors.Errorf("get workspace by id: %w", err)
-	}
-
-	template, err := q.db.GetTemplateByID(ctx, workspace.TemplateID)
-	if err != nil {
-		return xerrors.Errorf("get template by id: %w", err)
-	}
-
-	// Only template admins should be able to write JFrog Xray scans to a workspace.
-	// We don't want this to be a workspace-level permission because then users
-	// could overwrite their own results.
-	if err := q.authorizeContext(ctx, policy.ActionCreate, template); err != nil {
-		return err
-	}
-	return q.db.UpsertJFrogXrayScanByWorkspaceAndAgentID(ctx, arg)
 }
 
 func (q *querier) UpsertLastUpdateCheck(ctx context.Context, value string) error {

@@ -537,16 +537,14 @@ func WorkspaceAppStatuses(statuses []database.WorkspaceAppStatus) []codersdk.Wor
 
 func WorkspaceAppStatus(status database.WorkspaceAppStatus) codersdk.WorkspaceAppStatus {
 	return codersdk.WorkspaceAppStatus{
-		ID:                 status.ID,
-		CreatedAt:          status.CreatedAt,
-		WorkspaceID:        status.WorkspaceID,
-		AgentID:            status.AgentID,
-		AppID:              status.AppID,
-		NeedsUserAttention: status.NeedsUserAttention,
-		URI:                status.Uri.String,
-		Icon:               status.Icon.String,
-		Message:            status.Message,
-		State:              codersdk.WorkspaceAppStatusState(status.State),
+		ID:          status.ID,
+		CreatedAt:   status.CreatedAt,
+		WorkspaceID: status.WorkspaceID,
+		AgentID:     status.AgentID,
+		AppID:       status.AppID,
+		URI:         status.Uri.String,
+		Message:     status.Message,
+		State:       codersdk.WorkspaceAppStatusState(status.State),
 	}
 }
 
@@ -752,4 +750,17 @@ func AgentProtoConnectionActionToAuditAction(action database.AuditAction) (agent
 	default:
 		return agentproto.Connection_ACTION_UNSPECIFIED, xerrors.Errorf("unknown agent connection action %q", action)
 	}
+}
+
+func Chat(chat database.Chat) codersdk.Chat {
+	return codersdk.Chat{
+		ID:        chat.ID,
+		Title:     chat.Title,
+		CreatedAt: chat.CreatedAt,
+		UpdatedAt: chat.UpdatedAt,
+	}
+}
+
+func Chats(chats []database.Chat) []codersdk.Chat {
+	return List(chats, Chat)
 }

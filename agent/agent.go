@@ -89,9 +89,9 @@ type Options struct {
 	ServiceBannerRefreshInterval time.Duration
 	BlockFileTransfer            bool
 	Execer                       agentexec.Execer
-	ContainerLister              agentcontainers.Lister
 
 	ExperimentalDevcontainersEnabled bool
+	ContainerAPIOptions              []agentcontainers.Option // Enable ExperimentalDevcontainersEnabled for these to be effective.
 }
 
 type Client interface {
@@ -154,9 +154,6 @@ func New(options Options) Agent {
 	if options.Execer == nil {
 		options.Execer = agentexec.DefaultExecer
 	}
-	if options.ContainerLister == nil {
-		options.ContainerLister = agentcontainers.NoopLister{}
-	}
 
 	hardCtx, hardCancel := context.WithCancel(context.Background())
 	gracefulCtx, gracefulCancel := context.WithCancel(hardCtx)
@@ -192,9 +189,9 @@ func New(options Options) Agent {
 		prometheusRegistry: prometheusRegistry,
 		metrics:            newAgentMetrics(prometheusRegistry),
 		execer:             options.Execer,
-		lister:             options.ContainerLister,
 
 		experimentalDevcontainersEnabled: options.ExperimentalDevcontainersEnabled,
+		containerAPIOptions:              options.ContainerAPIOptions,
 	}
 	// Initially, we have a closed channel, reflecting the fact that we are not initially connected.
 	// Each time we connect we replace the channel (while holding the closeMutex) with a new one
@@ -229,13 +226,21 @@ type agent struct {
 	// we track 2 contexts and associated cancel functions: "graceful" which is Done when it is time
 	// to start gracefully shutting down and "hard" which is Done when it is time to close
 	// everything down (regardless of whether graceful shutdown completed).
-	gracefulCtx       context.Context
-	gracefulCancel    context.CancelFunc
-	hardCtx           context.Context
-	hardCancel        context.CancelFunc
-	closeWaitGroup    sync.WaitGroup
+	gracefulCtx    context.Context
+	gracefulCancel context.CancelFunc
+	hardCtx        context.Context
+	hardCancel     context.CancelFunc
+
+	// closeMutex protects the following:
 	closeMutex        sync.Mutex
+	closeWaitGroup    sync.WaitGroup
 	coordDisconnected chan struct{}
+	closing           bool
+	// note that once the network is set to non-nil, it is never modified, as with the statsReporter. So, routines
+	// that run after createOrUpdateNetwork and check the networkOK checkpoint do not need to hold the lock to use them.
+	network       *tailnet.Conn
+	statsReporter *statsReporter
+	// end fields protected by closeMutex
 
 	environmentVariables map[string]string
 
@@ -259,21 +264,22 @@ type agent struct {
 	reportConnectionsMu     sync.Mutex
 	reportConnections       []*proto.ReportConnectionRequest
 
-	network       *tailnet.Conn
-	statsReporter *statsReporter
-	logSender     *agentsdk.LogSender
+	logSender *agentsdk.LogSender
 
 	prometheusRegistry *prometheus.Registry
 	// metrics are prometheus registered metrics that will be collected and
 	// labeled in Coder with the agent + workspace.
 	metrics *agentMetrics
 	execer  agentexec.Execer
-	lister  agentcontainers.Lister
 
 	experimentalDevcontainersEnabled bool
+	containerAPIOptions              []agentcontainers.Option
+	containerAPI                     atomic.Pointer[agentcontainers.API] // Set by apiHandler.
 }
 
 func (a *agent) TailnetConn() *tailnet.Conn {
+	a.closeMutex.Lock()
+	defer a.closeMutex.Unlock()
 	return a.network
 }
 
@@ -1162,6 +1168,12 @@ func (a *agent) handleManifest(manifestOK *checkpoint) func(ctx context.Context,
 				}
 				a.metrics.startupScriptSeconds.WithLabelValues(label).Set(dur)
 				a.scriptRunner.StartCron()
+				if containerAPI := a.containerAPI.Load(); containerAPI != nil {
+					// Inform the container API that the agent is ready.
+					// This allows us to start watching for changes to
+					// the devcontainer configuration files.
+					containerAPI.SignalReady()
+				}
 			})
 			if err != nil {
 				return xerrors.Errorf("track conn goroutine: %w", err)
@@ -1205,15 +1217,15 @@ func (a *agent) createOrUpdateNetwork(manifestOK, networkOK *checkpoint) func(co
 			}
 			a.closeMutex.Lock()
 			// Re-check if agent was closed while initializing the network.
-			closed := a.isClosed()
-			if !closed {
+			closing := a.closing
+			if !closing {
 				a.network = network
 				a.statsReporter = newStatsReporter(a.logger, network, a)
 			}
 			a.closeMutex.Unlock()
-			if closed {
+			if closing {
 				_ = network.Close()
-				return xerrors.New("agent is closed")
+				return xerrors.New("agent is closing")
 			}
 		} else {
 			// Update the wireguard IPs if the agent ID changed.
@@ -1328,8 +1340,8 @@ func (*agent) wireguardAddresses(agentID uuid.UUID) []netip.Prefix {
 func (a *agent) trackGoroutine(fn func()) error {
 	a.closeMutex.Lock()
 	defer a.closeMutex.Unlock()
-	if a.isClosed() {
-		return xerrors.New("track conn goroutine: agent is closed")
+	if a.closing {
+		return xerrors.New("track conn goroutine: agent is closing")
 	}
 	a.closeWaitGroup.Add(1)
 	go func() {
@@ -1408,7 +1420,7 @@ func (a *agent) createTailnet(
 		if rPTYServeErr != nil &&
 			a.gracefulCtx.Err() == nil &&
 			!strings.Contains(rPTYServeErr.Error(), "use of closed network connection") {
-			a.logger.Error(ctx, "error serving reconnecting PTY", slog.Error(err))
+			a.logger.Error(ctx, "error serving reconnecting PTY", slog.Error(rPTYServeErr))
 		}
 	}); err != nil {
 		return nil, err
@@ -1473,8 +1485,13 @@ func (a *agent) createTailnet(
 	}()
 	if err = a.trackGoroutine(func() {
 		defer apiListener.Close()
+		apiHandler, closeAPIHAndler := a.apiHandler()
+		defer func() {
+			_ = closeAPIHAndler()
+		}()
 		server := &http.Server{
-			Handler:           a.apiHandler(),
+			BaseContext:       func(net.Listener) context.Context { return ctx },
+			Handler:           apiHandler,
 			ReadTimeout:       20 * time.Second,
 			ReadHeaderTimeout: 20 * time.Second,
 			WriteTimeout:      20 * time.Second,
@@ -1485,6 +1502,7 @@ func (a *agent) createTailnet(
 			case <-ctx.Done():
 			case <-a.hardCtx.Done():
 			}
+			_ = closeAPIHAndler()
 			_ = server.Close()
 		}()
 
@@ -1547,7 +1565,7 @@ func (a *agent) runCoordinator(ctx context.Context, tClient tailnetproto.DRPCTai
 func (a *agent) setCoordDisconnected() chan struct{} {
 	a.closeMutex.Lock()
 	defer a.closeMutex.Unlock()
-	if a.isClosed() {
+	if a.closing {
 		return nil
 	}
 	disconnected := make(chan struct{})
@@ -1772,7 +1790,10 @@ func (a *agent) HTTPDebug() http.Handler {
 
 func (a *agent) Close() error {
 	a.closeMutex.Lock()
-	defer a.closeMutex.Unlock()
+	network := a.network
+	coordDisconnected := a.coordDisconnected
+	a.closing = true
+	a.closeMutex.Unlock()
 	if a.isClosed() {
 		return nil
 	}
@@ -1849,7 +1870,7 @@ lifecycleWaitLoop:
 	select {
 	case <-a.hardCtx.Done():
 		a.logger.Warn(context.Background(), "timed out waiting for Coordinator RPC disconnect")
-	case <-a.coordDisconnected:
+	case <-coordDisconnected:
 		a.logger.Debug(context.Background(), "coordinator RPC disconnected")
 	}
 
@@ -1860,8 +1881,8 @@ lifecycleWaitLoop:
 	}
 
 	a.hardCancel()
-	if a.network != nil {
-		_ = a.network.Close()
+	if network != nil {
+		_ = network.Close()
 	}
 	a.closeWaitGroup.Wait()
 

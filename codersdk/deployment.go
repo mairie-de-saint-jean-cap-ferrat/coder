@@ -81,6 +81,7 @@ const (
 	FeatureControlSharedPorts         FeatureName = "control_shared_ports"
 	FeatureCustomRoles                FeatureName = "custom_roles"
 	FeatureMultipleOrganizations      FeatureName = "multiple_organizations"
+	FeatureWorkspacePrebuilds         FeatureName = "workspace_prebuilds"
 )
 
 // FeatureNames must be kept in-sync with the Feature enum above.
@@ -103,6 +104,7 @@ var FeatureNames = []FeatureName{
 	FeatureControlSharedPorts,
 	FeatureCustomRoles,
 	FeatureMultipleOrganizations,
+	FeatureWorkspacePrebuilds,
 }
 
 // Humanize returns the feature name in a human-readable format.
@@ -132,6 +134,7 @@ func (n FeatureName) AlwaysEnable() bool {
 		FeatureHighAvailability:           true,
 		FeatureCustomRoles:                true,
 		FeatureMultipleOrganizations:      true,
+		FeatureWorkspacePrebuilds:         true,
 	}[n]
 }
 
@@ -358,7 +361,7 @@ type DeploymentValues struct {
 	Telemetry                       TelemetryConfig                      `json:"telemetry,omitempty" typescript:",notnull"`
 	TLS                             TLSConfig                            `json:"tls,omitempty" typescript:",notnull"`
 	Trace                           TraceConfig                          `json:"trace,omitempty" typescript:",notnull"`
-	SecureAuthCookie                serpent.Bool                         `json:"secure_auth_cookie,omitempty" typescript:",notnull"`
+	HTTPCookies                     HTTPCookieConfig                     `json:"http_cookies,omitempty" typescript:",notnull"`
 	StrictTransportSecurity         serpent.Int64                        `json:"strict_transport_security,omitempty" typescript:",notnull"`
 	StrictTransportSecurityOptions  serpent.StringArray                  `json:"strict_transport_security_options,omitempty" typescript:",notnull"`
 	SSHKeygenAlgorithm              serpent.String                       `json:"ssh_keygen_algorithm,omitempty" typescript:",notnull"`
@@ -380,6 +383,7 @@ type DeploymentValues struct {
 	DisablePasswordAuth             serpent.Bool                         `json:"disable_password_auth,omitempty" typescript:",notnull"`
 	Support                         SupportConfig                        `json:"support,omitempty" typescript:",notnull"`
 	ExternalAuthConfigs             serpent.Struct[[]ExternalAuthConfig] `json:"external_auth,omitempty" typescript:",notnull"`
+	AI                              serpent.Struct[AIConfig]             `json:"ai,omitempty" typescript:",notnull"`
 	SSHConfig                       SSHConfig                            `json:"config_ssh,omitempty" typescript:",notnull"`
 	WgtunnelHost                    serpent.String                       `json:"wgtunnel_host,omitempty" typescript:",notnull"`
 	DisableOwnerWorkspaceExec       serpent.Bool                         `json:"disable_owner_workspace_exec,omitempty" typescript:",notnull"`
@@ -393,6 +397,8 @@ type DeploymentValues struct {
 	TermsOfServiceURL               serpent.String                       `json:"terms_of_service_url,omitempty" typescript:",notnull"`
 	Notifications                   NotificationsConfig                  `json:"notifications,omitempty" typescript:",notnull"`
 	AdditionalCSPPolicy             serpent.StringArray                  `json:"additional_csp_policy,omitempty" typescript:",notnull"`
+	WorkspaceHostnameSuffix         serpent.String                       `json:"workspace_hostname_suffix,omitempty" typescript:",notnull"`
+	Prebuilds                       PrebuildsConfig                      `json:"workspace_prebuilds,omitempty" typescript:",notnull"`
 
 	Config      serpent.YAMLConfigPath `json:"config,omitempty" typescript:",notnull"`
 	WriteConfig serpent.Bool           `json:"write_config,omitempty" typescript:",notnull"`
@@ -585,6 +591,30 @@ type TraceConfig struct {
 	DataDog         serpent.Bool   `json:"data_dog" typescript:",notnull"`
 }
 
+type HTTPCookieConfig struct {
+	Secure   serpent.Bool `json:"secure_auth_cookie,omitempty" typescript:",notnull"`
+	SameSite string       `json:"same_site,omitempty" typescript:",notnull"`
+}
+
+func (cfg *HTTPCookieConfig) Apply(c *http.Cookie) *http.Cookie {
+	c.Secure = cfg.Secure.Value()
+	c.SameSite = cfg.HTTPSameSite()
+	return c
+}
+
+func (cfg HTTPCookieConfig) HTTPSameSite() http.SameSite {
+	switch strings.ToLower(cfg.SameSite) {
+	case "lax":
+		return http.SameSiteLaxMode
+	case "strict":
+		return http.SameSiteStrictMode
+	case "none":
+		return http.SameSiteNoneMode
+	default:
+		return http.SameSiteDefaultMode
+	}
+}
+
 type ExternalAuthConfig struct {
 	// Type is the type of external auth config.
 	Type         string `json:"type" yaml:"type"`
@@ -766,6 +796,19 @@ type NotificationsWebhookConfig struct {
 	Endpoint serpent.URL `json:"endpoint" typescript:",notnull"`
 }
 
+type PrebuildsConfig struct {
+	// ReconciliationInterval defines how often the workspace prebuilds state should be reconciled.
+	ReconciliationInterval serpent.Duration `json:"reconciliation_interval" typescript:",notnull"`
+
+	// ReconciliationBackoffInterval specifies the amount of time to increase the backoff interval
+	// when errors occur during reconciliation.
+	ReconciliationBackoffInterval serpent.Duration `json:"reconciliation_backoff_interval" typescript:",notnull"`
+
+	// ReconciliationBackoffLookback determines the time window to look back when calculating
+	// the number of failed prebuilds, which influences the backoff strategy.
+	ReconciliationBackoffLookback serpent.Duration `json:"reconciliation_backoff_lookback" typescript:",notnull"`
+}
+
 const (
 	annotationFormatDuration = "format_duration"
 	annotationEnterpriseKey  = "enterprise"
@@ -944,7 +987,7 @@ func (c *DeploymentValues) Options() serpent.OptionSet {
 		deploymentGroupClient = serpent.Group{
 			Name: "Client",
 			Description: "These options change the behavior of how clients interact with the Coder. " +
-				"Clients include the coder cli, vs code extension, and the web UI.",
+				"Clients include the Coder CLI, Coder Desktop, IDE extensions, and the web UI.",
 			YAML: "client",
 		}
 		deploymentGroupConfig = serpent.Group{
@@ -995,6 +1038,11 @@ func (c *DeploymentValues) Options() serpent.OptionSet {
 			Name:   "Webhook",
 			Parent: &deploymentGroupNotifications,
 			YAML:   "webhook",
+		}
+		deploymentGroupPrebuilds = serpent.Group{
+			Name:        "Workspace Prebuilds",
+			YAML:        "workspace_prebuilds",
+			Description: "Configure how workspace prebuilds behave.",
 		}
 		deploymentGroupInbox = serpent.Group{
 			Name:   "Inbox",
@@ -2375,9 +2423,21 @@ func (c *DeploymentValues) Options() serpent.OptionSet {
 			Description: "Controls if the 'Secure' property is set on browser session cookies.",
 			Flag:        "secure-auth-cookie",
 			Env:         "CODER_SECURE_AUTH_COOKIE",
-			Value:       &c.SecureAuthCookie,
+			Value:       &c.HTTPCookies.Secure,
 			Group:       &deploymentGroupNetworking,
 			YAML:        "secureAuthCookie",
+			Annotations: serpent.Annotations{}.Mark(annotationExternalProxies, "true"),
+		},
+		{
+			Name:        "SameSite Auth Cookie",
+			Description: "Controls the 'SameSite' property is set on browser session cookies.",
+			Flag:        "samesite-auth-cookie",
+			Env:         "CODER_SAMESITE_AUTH_COOKIE",
+			// Do not allow "strict" same-site cookies. That would potentially break workspace apps.
+			Value:       serpent.EnumOf(&c.HTTPCookies.SameSite, "lax", "none"),
+			Default:     "lax",
+			Group:       &deploymentGroupNetworking,
+			YAML:        "sameSiteAuthCookie",
 			Annotations: serpent.Annotations{}.Mark(annotationExternalProxies, "true"),
 		},
 		{
@@ -2550,6 +2610,17 @@ func (c *DeploymentValues) Options() serpent.OptionSet {
 			Default:     "coder.",
 		},
 		{
+			Name:        "Workspace Hostname Suffix",
+			Description: "Workspace hostnames use this suffix in SSH config and Coder Connect on Coder Desktop. By default it is coder, resulting in names like myworkspace.coder.",
+			Flag:        "workspace-hostname-suffix",
+			Env:         "CODER_WORKSPACE_HOSTNAME_SUFFIX",
+			YAML:        "workspaceHostnameSuffix",
+			Group:       &deploymentGroupClient,
+			Value:       &c.WorkspaceHostnameSuffix,
+			Hidden:      false,
+			Default:     "coder",
+		},
+		{
 			Name: "SSH Config Options",
 			Description: "These SSH config options will override the default SSH config options. " +
 				"Provide options in \"key=value\" or \"key value\" format separated by commas." +
@@ -2589,6 +2660,15 @@ Write out the current server config as YAML to stdout.`,
 			YAML:        "supportLinks",
 			Value:       &c.Support.Links,
 			Hidden:      false,
+		},
+		{
+			// Env handling is done in cli.ReadAIProvidersFromEnv
+			Name:        "AI",
+			Description: "Configure AI providers.",
+			YAML:        "ai",
+			Value:       &c.AI,
+			// Hidden because this is experimental.
+			Hidden: true,
 		},
 		{
 			// Env handling is done in cli.ReadGitAuthFromEnvironment
@@ -2968,10 +3048,62 @@ Write out the current server config as YAML to stdout.`,
 			Annotations: serpent.Annotations{}.Mark(annotationFormatDuration, "true"),
 			Hidden:      true, // Hidden because most operators should not need to modify this.
 		},
-		// Push notifications.
+
+		// Workspace Prebuilds Options
+		{
+			Name:        "Reconciliation Interval",
+			Description: "How often to reconcile workspace prebuilds state.",
+			Flag:        "workspace-prebuilds-reconciliation-interval",
+			Env:         "CODER_WORKSPACE_PREBUILDS_RECONCILIATION_INTERVAL",
+			Value:       &c.Prebuilds.ReconciliationInterval,
+			Default:     (time.Second * 15).String(),
+			Group:       &deploymentGroupPrebuilds,
+			YAML:        "reconciliation_interval",
+			Annotations: serpent.Annotations{}.Mark(annotationFormatDuration, "true"),
+			Hidden:      ExperimentsSafe.Enabled(ExperimentWorkspacePrebuilds), // Hide setting while this feature is experimental.
+		},
+		{
+			Name:        "Reconciliation Backoff Interval",
+			Description: "Interval to increase reconciliation backoff by when prebuilds fail, after which a retry attempt is made.",
+			Flag:        "workspace-prebuilds-reconciliation-backoff-interval",
+			Env:         "CODER_WORKSPACE_PREBUILDS_RECONCILIATION_BACKOFF_INTERVAL",
+			Value:       &c.Prebuilds.ReconciliationBackoffInterval,
+			Default:     (time.Second * 15).String(),
+			Group:       &deploymentGroupPrebuilds,
+			YAML:        "reconciliation_backoff_interval",
+			Annotations: serpent.Annotations{}.Mark(annotationFormatDuration, "true"),
+			Hidden:      true,
+		},
+		{
+			Name:        "Reconciliation Backoff Lookback Period",
+			Description: "Interval to look back to determine number of failed prebuilds, which influences backoff.",
+			Flag:        "workspace-prebuilds-reconciliation-backoff-lookback-period",
+			Env:         "CODER_WORKSPACE_PREBUILDS_RECONCILIATION_BACKOFF_LOOKBACK_PERIOD",
+			Value:       &c.Prebuilds.ReconciliationBackoffLookback,
+			Default:     (time.Hour).String(), // TODO: use https://pkg.go.dev/github.com/jackc/pgtype@v1.12.0#Interval
+			Group:       &deploymentGroupPrebuilds,
+			YAML:        "reconciliation_backoff_lookback_period",
+			Annotations: serpent.Annotations{}.Mark(annotationFormatDuration, "true"),
+			Hidden:      true,
+		},
 	}
 
 	return opts
+}
+
+type AIProviderConfig struct {
+	// Type is the type of the API provider.
+	Type string `json:"type" yaml:"type"`
+	// APIKey is the API key to use for the API provider.
+	APIKey string `json:"-" yaml:"api_key"`
+	// Models is the list of models to use for the API provider.
+	Models []string `json:"models" yaml:"models"`
+	// BaseURL is the base URL to use for the API provider.
+	BaseURL string `json:"base_url" yaml:"base_url"`
+}
+
+type AIConfig struct {
+	Providers []AIProviderConfig `json:"providers,omitempty" yaml:"providers,omitempty"`
 }
 
 type SupportConfig struct {
@@ -3195,13 +3327,17 @@ const (
 	ExperimentWorkspaceUsage     Experiment = "workspace-usage"      // Enables the new workspace usage tracking.
 	ExperimentWebPush            Experiment = "web-push"             // Enables web push notifications through the browser.
 	ExperimentDynamicParameters  Experiment = "dynamic-parameters"   // Enables dynamic parameters when creating a workspace.
+	ExperimentWorkspacePrebuilds Experiment = "workspace-prebuilds"  // Enables the new workspace prebuilds feature.
+	ExperimentAgenticChat        Experiment = "agentic-chat"         // Enables the new agentic AI chat feature.
 )
 
-// ExperimentsAll should include all experiments that are safe for
+// ExperimentsSafe should include all experiments that are safe for
 // users to opt-in to via --experimental='*'.
 // Experiments that are not ready for consumption by all users should
 // not be included here and will be essentially hidden.
-var ExperimentsAll = Experiments{}
+var ExperimentsSafe = Experiments{
+	ExperimentWorkspacePrebuilds,
+}
 
 // Experiments is a list of experiments.
 // Multiple experiments may be enabled at the same time.
@@ -3381,7 +3517,12 @@ type DeploymentStats struct {
 }
 
 type SSHConfigResponse struct {
-	HostnamePrefix   string            `json:"hostname_prefix"`
+	// HostnamePrefix is the prefix we append to workspace names for SSH hostnames.
+	// Deprecated: use HostnameSuffix instead.
+	HostnamePrefix string `json:"hostname_prefix"`
+
+	// HostnameSuffix is the suffix to append to workspace names for SSH hostnames.
+	HostnameSuffix   string            `json:"hostname_suffix"`
 	SSHConfigOptions map[string]string `json:"ssh_config_options"`
 }
 
@@ -3400,6 +3541,32 @@ func (c *Client) SSHConfiguration(ctx context.Context) (SSHConfigResponse, error
 
 	var sshConfig SSHConfigResponse
 	return sshConfig, json.NewDecoder(res.Body).Decode(&sshConfig)
+}
+
+type LanguageModelConfig struct {
+	Models []LanguageModel `json:"models"`
+}
+
+// LanguageModel is a language model that can be used for chat.
+type LanguageModel struct {
+	// ID is used by the provider to identify the LLM.
+	ID          string `json:"id"`
+	DisplayName string `json:"display_name"`
+	// Provider is the provider of the LLM. e.g. openai, anthropic, etc.
+	Provider string `json:"provider"`
+}
+
+func (c *Client) LanguageModelConfig(ctx context.Context) (LanguageModelConfig, error) {
+	res, err := c.Request(ctx, http.MethodGet, "/api/v2/deployment/llms", nil)
+	if err != nil {
+		return LanguageModelConfig{}, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return LanguageModelConfig{}, ReadBodyAsError(res)
+	}
+	var llms LanguageModelConfig
+	return llms, json.NewDecoder(res.Body).Decode(&llms)
 }
 
 type CryptoKeyFeature string

@@ -52,7 +52,7 @@ import {
 import { EmptyTemplates } from "./EmptyTemplates";
 import { TemplatesFilter } from "./TemplatesFilter";
 
-export const Language = {
+const Language = {
 	developerCount: (activeCount: number): string => {
 		return `${formatTemplateActiveDevelopers(activeCount)} developer${
 			activeCount !== 1 ? "s" : ""
@@ -102,7 +102,7 @@ const TemplateRow: FC<TemplateRowProps> = ({
 	);
 	const navigate = useNavigate();
 
-	const { css: clickableCss, ...clickableRow } = useClickableTableRow({
+	const clickableRow = useClickableTableRow({
 		onClick: () => navigate(templatePageLink),
 	});
 
@@ -111,7 +111,7 @@ const TemplateRow: FC<TemplateRowProps> = ({
 			key={template.id}
 			data-testid={`template-${template.id}`}
 			{...clickableRow}
-			css={[clickableCss, styles.tableRow]}
+			css={styles.tableRow}
 		>
 			<TableCell>
 				<AvatarData

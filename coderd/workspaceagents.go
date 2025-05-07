@@ -33,6 +33,7 @@ import (
 	"github.com/coder/coder/v2/coderd/externalauth"
 	"github.com/coder/coder/v2/coderd/httpapi"
 	"github.com/coder/coder/v2/coderd/httpmw"
+	"github.com/coder/coder/v2/coderd/httpmw/loggermw"
 	"github.com/coder/coder/v2/coderd/jwtutils"
 	"github.com/coder/coder/v2/coderd/rbac"
 	"github.com/coder/coder/v2/coderd/rbac/policy"
@@ -337,9 +338,33 @@ func (api *API) patchWorkspaceAgentAppStatus(rw http.ResponseWriter, r *http.Req
 		Slug:    req.AppSlug,
 	})
 	if err != nil {
-		httpapi.Write(ctx, rw, http.StatusInternalServerError, codersdk.Response{
+		httpapi.Write(ctx, rw, http.StatusBadRequest, codersdk.Response{
 			Message: "Failed to get workspace app.",
-			Detail:  err.Error(),
+			Detail:  fmt.Sprintf("No app found with slug %q", req.AppSlug),
+		})
+		return
+	}
+
+	if len(req.Message) > 160 {
+		httpapi.Write(ctx, rw, http.StatusBadRequest, codersdk.Response{
+			Message: "Message is too long.",
+			Detail:  "Message must be less than 160 characters.",
+			Validations: []codersdk.ValidationError{
+				{Field: "message", Detail: "Message must be less than 160 characters."},
+			},
+		})
+		return
+	}
+
+	switch req.State {
+	case codersdk.WorkspaceAppStatusStateComplete, codersdk.WorkspaceAppStatusStateFailure, codersdk.WorkspaceAppStatusStateWorking: // valid states
+	default:
+		httpapi.Write(ctx, rw, http.StatusBadRequest, codersdk.Response{
+			Message: "Invalid state provided.",
+			Detail:  fmt.Sprintf("invalid state: %q", req.State),
+			Validations: []codersdk.ValidationError{
+				{Field: "state", Detail: "State must be one of: complete, failure, working."},
+			},
 		})
 		return
 	}
@@ -366,11 +391,6 @@ func (api *API) patchWorkspaceAgentAppStatus(rw http.ResponseWriter, r *http.Req
 			String: req.URI,
 			Valid:  req.URI != "",
 		},
-		Icon: sql.NullString{
-			String: req.Icon,
-			Valid:  req.Icon != "",
-		},
-		NeedsUserAttention: req.NeedsUserAttention,
 	})
 	if err != nil {
 		httpapi.Write(ctx, rw, http.StatusInternalServerError, codersdk.Response{
@@ -554,6 +574,9 @@ func (api *API) workspaceAgentLogs(rw http.ResponseWriter, r *http.Request) {
 	recheckInterval := time.Minute
 	t := time.NewTicker(recheckInterval)
 	defer t.Stop()
+
+	// Log the request immediately instead of after it completes.
+	loggermw.RequestLoggerFromContext(ctx).WriteLog(ctx, http.StatusAccepted)
 
 	go func() {
 		defer func() {
@@ -849,6 +872,11 @@ func (api *API) workspaceAgentListContainers(rw http.ResponseWriter, r *http.Req
 			})
 			return
 		}
+		// If the agent returns a codersdk.Error, we can return that directly.
+		if cerr, ok := codersdk.AsError(err); ok {
+			httpapi.Write(ctx, rw, cerr.StatusCode(), cerr.Response)
+			return
+		}
 		httpapi.Write(ctx, rw, http.StatusInternalServerError, codersdk.Response{
 			Message: "Internal error fetching containers.",
 			Detail:  err.Error(),
@@ -879,6 +907,7 @@ func (api *API) workspaceAgentConnection(rw http.ResponseWriter, r *http.Request
 		DERPMap:                  api.DERPMap(),
 		DERPForceWebSockets:      api.DeploymentValues.DERP.Config.ForceWebSockets.Value(),
 		DisableDirectConnections: api.DeploymentValues.DERP.Config.BlockDirect.Value(),
+		HostnameSuffix:           api.DeploymentValues.WorkspaceHostnameSuffix.Value(),
 	})
 }
 
@@ -900,6 +929,7 @@ func (api *API) workspaceAgentConnectionGeneric(rw http.ResponseWriter, r *http.
 		DERPMap:                  api.DERPMap(),
 		DERPForceWebSockets:      api.DeploymentValues.DERP.Config.ForceWebSockets.Value(),
 		DisableDirectConnections: api.DeploymentValues.DERP.Config.BlockDirect.Value(),
+		HostnameSuffix:           api.DeploymentValues.WorkspaceHostnameSuffix.Value(),
 	})
 }
 
@@ -927,6 +957,9 @@ func (api *API) derpMapUpdates(rw http.ResponseWriter, r *http.Request) {
 	}
 	encoder := wsjson.NewEncoder[*tailcfg.DERPMap](ws, websocket.MessageBinary)
 	defer encoder.Close(websocket.StatusGoingAway)
+
+	// Log the request immediately instead of after it completes.
+	loggermw.RequestLoggerFromContext(ctx).WriteLog(ctx, http.StatusAccepted)
 
 	go func(ctx context.Context) {
 		// TODO(mafredri): Is this too frequent? Use separate ping disconnect timeout?
@@ -988,6 +1021,16 @@ func (api *API) derpMapUpdates(rw http.ResponseWriter, r *http.Request) {
 // @Router /workspaceagents/{workspaceagent}/coordinate [get]
 func (api *API) workspaceAgentClientCoordinate(rw http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+
+	// Ensure the database is reachable before proceeding.
+	_, err := api.Database.Ping(ctx)
+	if err != nil {
+		httpapi.Write(ctx, rw, http.StatusInternalServerError, codersdk.Response{
+			Message: codersdk.DatabaseNotReachable,
+			Detail:  err.Error(),
+		})
+		return
+	}
 
 	// This route accepts user API key auth and workspace proxy auth. The moon actor has
 	// full permissions so should be able to pass this authz check.
@@ -1314,6 +1357,9 @@ func (api *API) watchWorkspaceAgentMetadata(
 	const sendInterval = time.Second * 1
 	sendTicker := time.NewTicker(sendInterval)
 	defer sendTicker.Stop()
+
+	// Log the request immediately instead of after it completes.
+	loggermw.RequestLoggerFromContext(ctx).WriteLog(ctx, http.StatusAccepted)
 
 	// Send initial metadata.
 	sendMetadata()

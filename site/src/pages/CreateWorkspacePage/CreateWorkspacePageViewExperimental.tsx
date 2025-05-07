@@ -1,101 +1,115 @@
-import type { Interpolation, Theme } from "@emotion/react";
 import type * as TypesGen from "api/typesGenerated";
+import type { PreviewDiagnostics, PreviewParameter } from "api/typesGenerated";
 import { Alert } from "components/Alert/Alert";
 import { ErrorAlert } from "components/Alert/ErrorAlert";
 import { Avatar } from "components/Avatar/Avatar";
 import { Button } from "components/Button/Button";
 import { FeatureStageBadge } from "components/FeatureStageBadge/FeatureStageBadge";
-import { SelectFilter } from "components/Filter/SelectFilter";
 import { Input } from "components/Input/Input";
 import { Label } from "components/Label/Label";
 import { Pill } from "components/Pill/Pill";
-import { RichParameterInput } from "components/RichParameterInput/RichParameterInput";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "components/Select/Select";
 import { Spinner } from "components/Spinner/Spinner";
-import { Stack } from "components/Stack/Stack";
+import { Switch } from "components/Switch/Switch";
 import { UserAutocomplete } from "components/UserAutocomplete/UserAutocomplete";
 import { type FormikContextType, useFormik } from "formik";
-import { ArrowLeft } from "lucide-react";
+import { useDebouncedFunction } from "hooks/debounce";
+import { ArrowLeft, CircleAlert, TriangleAlert } from "lucide-react";
+import {
+	DynamicParameter,
+	getInitialParameterValues,
+	useValidationSchemaForDynamicParameters,
+} from "modules/workspaces/DynamicParameter/DynamicParameter";
 import { generateWorkspaceName } from "modules/workspaces/generateWorkspaceName";
 import {
 	type FC,
 	useCallback,
+	useContext,
 	useEffect,
 	useId,
-	useMemo,
+	useRef,
 	useState,
 } from "react";
-import { getFormHelpers, nameValidator } from "utils/formUtils";
-import {
-	type AutofillBuildParameter,
-	getInitialRichParameterValues,
-	useValidationSchemaForRichParameters,
-} from "utils/richParameters";
+import { nameValidator } from "utils/formUtils";
+import type { AutofillBuildParameter } from "utils/richParameters";
 import * as Yup from "yup";
 import type {
 	CreateWorkspaceMode,
 	ExternalAuthPollingState,
 } from "./CreateWorkspacePage";
+import { ExperimentalFormContext } from "./ExperimentalFormContext";
 import { ExternalAuthButton } from "./ExternalAuthButton";
 import type { CreateWorkspacePermissions } from "./permissions";
-export const Language = {
-	duplicationWarning:
-		"Duplicating a workspace only copies its parameters. No state from the old workspace is copied over.",
-} as const;
 
 export interface CreateWorkspacePageViewExperimentalProps {
-	mode: CreateWorkspaceMode;
+	autofillParameters: AutofillBuildParameter[];
+	creatingWorkspace: boolean;
 	defaultName?: string | null;
+	defaultOwner: TypesGen.User;
+	diagnostics: PreviewDiagnostics;
 	disabledParams?: string[];
 	error: unknown;
-	resetMutation: () => void;
-	defaultOwner: TypesGen.User;
-	template: TypesGen.Template;
-	versionId?: string;
 	externalAuth: TypesGen.TemplateVersionExternalAuth[];
 	externalAuthPollingState: ExternalAuthPollingState;
-	startPollingExternalAuth: () => void;
 	hasAllRequiredExternalAuth: boolean;
-	parameters: TypesGen.TemplateVersionParameter[];
-	autofillParameters: AutofillBuildParameter[];
-	presets: TypesGen.Preset[];
+	mode: CreateWorkspaceMode;
+	parameters: PreviewParameter[];
 	permissions: CreateWorkspacePermissions;
-	creatingWorkspace: boolean;
+	presets: TypesGen.Preset[];
+	template: TypesGen.Template;
+	versionId?: string;
 	onCancel: () => void;
 	onSubmit: (
 		req: TypesGen.CreateWorkspaceRequest,
 		owner: TypesGen.User,
 	) => void;
+	resetMutation: () => void;
+	sendMessage: (message: Record<string, string>) => void;
+	startPollingExternalAuth: () => void;
+	owner: TypesGen.User;
+	setOwner: (user: TypesGen.User) => void;
 }
 
 export const CreateWorkspacePageViewExperimental: FC<
 	CreateWorkspacePageViewExperimentalProps
 > = ({
-	mode,
+	autofillParameters,
+	creatingWorkspace,
 	defaultName,
+	defaultOwner,
+	diagnostics,
 	disabledParams,
 	error,
-	resetMutation,
-	defaultOwner,
-	template,
-	versionId,
 	externalAuth,
 	externalAuthPollingState,
-	startPollingExternalAuth,
 	hasAllRequiredExternalAuth,
+	mode,
 	parameters,
-	autofillParameters,
-	presets = [],
 	permissions,
-	creatingWorkspace,
+	presets = [],
+	template,
+	versionId,
 	onSubmit,
 	onCancel,
+	resetMutation,
+	sendMessage,
+	startPollingExternalAuth,
+	owner,
+	setOwner,
 }) => {
-	const [owner, setOwner] = useState(defaultOwner);
+	const experimentalFormContext = useContext(ExperimentalFormContext);
 	const [suggestedName, setSuggestedName] = useState(() =>
 		generateWorkspaceName(),
 	);
+	const [showPresetParameters, setShowPresetParameters] = useState(false);
 	const id = useId();
-
+	const workspaceNameInputRef = useRef<HTMLInputElement>(null);
 	const rerollSuggestedName = useCallback(() => {
 		setSuggestedName(() => generateWorkspaceName());
 	}, []);
@@ -105,16 +119,19 @@ export const CreateWorkspacePageViewExperimental: FC<
 			initialValues: {
 				name: defaultName ?? "",
 				template_id: template.id,
-				rich_parameter_values: getInitialRichParameterValues(
+				rich_parameter_values: getInitialParameterValues(
 					parameters,
 					autofillParameters,
 				),
 			},
 			validationSchema: Yup.object({
 				name: nameValidator("Workspace Name"),
-				rich_parameter_values: useValidationSchemaForRichParameters(parameters),
+				rich_parameter_values:
+					useValidationSchemaForDynamicParameters(parameters),
 			}),
-			enableReinitialize: true,
+			enableReinitialize: false,
+			validateOnChange: true,
+			validateOnBlur: true,
 			onSubmit: (request) => {
 				if (!hasAllRequiredExternalAuth) {
 					return;
@@ -130,25 +147,22 @@ export const CreateWorkspacePageViewExperimental: FC<
 		}
 	}, [error]);
 
-	const getFieldHelpers = getFormHelpers<TypesGen.CreateWorkspaceRequest>(
-		form,
-		error,
-	);
-
-	const autofillByName = useMemo(
-		() =>
-			Object.fromEntries(
-				autofillParameters.map((param) => [param.name, param]),
-			),
-		[autofillParameters],
-	);
+	useEffect(() => {
+		if (form.submitCount > 0 && form.errors) {
+			workspaceNameInputRef.current?.scrollIntoView({
+				behavior: "smooth",
+				block: "center",
+			});
+			workspaceNameInputRef.current?.focus();
+		}
+	}, [form.submitCount, form.errors]);
 
 	const [presetOptions, setPresetOptions] = useState([
-		{ label: "None", value: "" },
+		{ label: "None", value: "None" },
 	]);
 	useEffect(() => {
 		setPresetOptions([
-			{ label: "None", value: "" },
+			{ label: "None", value: "None" },
 			...presets.map((preset) => ({
 				label: preset.Name,
 				value: preset.ID,
@@ -195,13 +209,67 @@ export const CreateWorkspacePageViewExperimental: FC<
 		presetOptions,
 		selectedPresetIndex,
 		presets,
-		parameters,
 		form.setFieldValue,
+		parameters,
 	]);
+
+	// send the last user modified parameter and all touched parameters to the websocket
+	const sendDynamicParamsRequest = (
+		parameter: PreviewParameter,
+		value: string,
+	) => {
+		const formInputs: { [k: string]: string } = {};
+		formInputs[parameter.name] = value;
+		const parameters = form.values.rich_parameter_values ?? [];
+
+		for (const [fieldName, isTouched] of Object.entries(form.touched)) {
+			if (isTouched && fieldName !== parameter.name) {
+				const param = parameters.find((p) => p.name === fieldName);
+				if (param?.value) {
+					formInputs[fieldName] = param.value;
+				}
+			}
+		}
+
+		sendMessage(formInputs);
+	};
+
+	const { debounced: handleChangeDebounced } = useDebouncedFunction(
+		async (
+			parameter: PreviewParameter,
+			parameterField: string,
+			value: string,
+		) => {
+			await form.setFieldValue(parameterField, {
+				name: parameter.name,
+				value,
+			});
+			form.setFieldTouched(parameter.name, true);
+			sendDynamicParamsRequest(parameter, value);
+		},
+		500,
+	);
+
+	const handleChange = async (
+		parameter: PreviewParameter,
+		parameterField: string,
+		value: string,
+	) => {
+		if (parameter.form_type === "input" || parameter.form_type === "textarea") {
+			handleChangeDebounced(parameter, parameterField, value);
+		} else {
+			await form.setFieldValue(parameterField, {
+				name: parameter.name,
+				value,
+			});
+			form.setFieldTouched(parameter.name, true);
+			sendDynamicParamsRequest(parameter, value);
+		}
+	};
 
 	return (
 		<>
-			<div className="absolute sticky top-5 ml-10">
+			<div className="sticky top-5 ml-10">
 				<button
 					onClick={onCancel}
 					type="button"
@@ -211,8 +279,8 @@ export const CreateWorkspacePageViewExperimental: FC<
 					Go back
 				</button>
 			</div>
-			<div className="flex flex-col gap-6 max-w-screen-sm mx-auto">
-				<header className="flex flex-col gap-2 mt-10">
+			<div className="flex flex-col gap-6 max-w-screen-md mx-auto">
+				<header className="flex flex-col items-start gap-2 mt-10">
 					<div className="flex items-center gap-2">
 						<Avatar
 							variant="icon"
@@ -229,12 +297,22 @@ export const CreateWorkspacePageViewExperimental: FC<
 					<h1 className="text-3xl font-semibold m-0">New workspace</h1>
 
 					{template.deprecated && <Pill type="warning">Deprecated</Pill>}
+
+					{experimentalFormContext && (
+						<Button
+							size="sm"
+							variant="subtle"
+							onClick={experimentalFormContext.toggleOptedOut}
+						>
+							Go back to the classic workspace creation flow
+						</Button>
+					)}
 				</header>
 
 				<form
 					onSubmit={form.handleSubmit}
 					aria-label="Create workspace form"
-					className="flex flex-col gap-6 w-full border border-border-default border-solid rounded-lg p-6"
+					className="flex flex-col gap-10 w-full border border-border-default border-solid rounded-lg p-6"
 				>
 					{Boolean(error) && <ErrorAlert error={error} />}
 
@@ -244,7 +322,8 @@ export const CreateWorkspacePageViewExperimental: FC<
 							dismissible
 							data-testid="duplication-warning"
 						>
-							{Language.duplicationWarning}
+							Duplicating a workspace only copies its parameters. No state from
+							the old workspace is copied over.
 						</Alert>
 					)}
 
@@ -274,9 +353,10 @@ export const CreateWorkspacePageViewExperimental: FC<
 									<Label className="text-sm" htmlFor={`${id}-workspace-name`}>
 										Workspace name
 									</Label>
-									<div>
+									<div className="flex flex-col">
 										<Input
 											id={`${id}-workspace-name`}
+											ref={workspaceNameInputRef}
 											value={form.values.name}
 											onChange={(e) => {
 												form.setFieldValue("name", e.target.value.trim());
@@ -284,6 +364,11 @@ export const CreateWorkspacePageViewExperimental: FC<
 											}}
 											disabled={creatingWorkspace}
 										/>
+										{form.touched.name && form.errors.name && (
+											<div className="text-content-destructive text-xs mt-2">
+												{form.errors.name}
+											</div>
+										)}
 										<div className="flex gap-2 text-xs text-content-secondary items-center">
 											Need a suggestion?
 											<Button
@@ -320,14 +405,14 @@ export const CreateWorkspacePageViewExperimental: FC<
 					{externalAuth && externalAuth.length > 0 && (
 						<section>
 							<hgroup>
-								<h2 className="text-xl font-semibold mb-0">
+								<h2 className="text-xl font-semibold m-0">
 									External Authentication
 								</h2>
 								<p className="text-sm text-content-secondary mt-0">
 									This template uses external services for authentication.
 								</p>
 							</hgroup>
-							<div>
+							<div className="flex flex-col gap-4">
 								{Boolean(error) && !hasAllRequiredExternalAuth && (
 									<Alert severity="error">
 										To create a workspace using this template, please connect to
@@ -349,67 +434,91 @@ export const CreateWorkspacePageViewExperimental: FC<
 					)}
 
 					{parameters.length > 0 && (
-						<section className="flex flex-col gap-6">
+						<section className="flex flex-col gap-9">
 							<hgroup>
 								<h2 className="text-xl font-semibold m-0">Parameters</h2>
 								<p className="text-sm text-content-secondary m-0">
-									These are the settings used by your template. Please note that
-									immutable parameters cannot be modified once the workspace is
-									created.
+									These are the settings used by your template. Immutable
+									parameters cannot be modified once the workspace is created.
 								</p>
 							</hgroup>
+							{diagnostics.length > 0 && (
+								<Diagnostics diagnostics={diagnostics} />
+							)}
 							{presets.length > 0 && (
-								<Stack direction="column" spacing={2}>
-									<div className="flex flex-col gap-2">
-										<div className="flex gap-2 items-center">
-											<Label className="text-sm">Preset</Label>
-											<FeatureStageBadge contentType={"beta"} size="md" />
-										</div>
-										<div className="flex">
-											<SelectFilter
-												label="Preset"
-												options={presetOptions}
-												onSelect={(option) => {
+								<div className="flex flex-col gap-2">
+									<div className="flex gap-2 items-center">
+										<Label className="text-sm">Preset</Label>
+										<FeatureStageBadge contentType={"beta"} size="md" />
+									</div>
+									<div className="flex flex-col gap-4">
+										<div className="max-w-lg">
+											<Select
+												onValueChange={(option) => {
 													const index = presetOptions.findIndex(
-														(preset) => preset.value === option?.value,
+														(preset) => preset.value === option,
 													);
 													if (index === -1) {
 														return;
 													}
 													setSelectedPresetIndex(index);
 												}}
-												placeholder="Select a preset"
-												selectedOption={presetOptions[selectedPresetIndex]}
-											/>
+											>
+												<SelectTrigger>
+													<SelectValue placeholder={"Select a preset"} />
+												</SelectTrigger>
+												<SelectContent>
+													{presetOptions.map((option) => (
+														<SelectItem key={option.value} value={option.value}>
+															{option.label}
+														</SelectItem>
+													))}
+												</SelectContent>
+											</Select>
 										</div>
+										<span className="flex items-center gap-3">
+											<Switch
+												id="show-preset-parameters"
+												checked={showPresetParameters}
+												onCheckedChange={setShowPresetParameters}
+											/>
+											<Label htmlFor="show-preset-parameters">
+												Show preset parameters
+											</Label>
+										</span>
 									</div>
-								</Stack>
+								</div>
 							)}
 
 							<div className="flex flex-col gap-9">
 								{parameters.map((parameter, index) => {
 									const parameterField = `rich_parameter_values.${index}`;
 									const parameterInputName = `${parameterField}.value`;
+									const isPresetParameter = presetParameterNames.includes(
+										parameter.name,
+									);
 									const isDisabled =
 										disabledParams?.includes(
 											parameter.name.toLowerCase().replace(/ /g, "_"),
 										) ||
+										(parameter.styling as { disabled?: boolean })?.disabled ||
 										creatingWorkspace ||
-										presetParameterNames.includes(parameter.name);
+										isPresetParameter;
+
+									// Hide preset parameters if showPresetParameters is false
+									if (!showPresetParameters && isPresetParameter) {
+										return null;
+									}
 
 									return (
-										<RichParameterInput
-											{...getFieldHelpers(parameterInputName)}
-											onChange={async (value) => {
-												await form.setFieldValue(parameterField, {
-													name: parameter.name,
-													value,
-												});
-											}}
+										<DynamicParameter
 											key={parameter.name}
 											parameter={parameter}
-											parameterAutofill={autofillByName[parameter.name]}
+											onChange={(value) =>
+												handleChange(parameter, parameterField, value)
+											}
 											disabled={isDisabled}
+											isPreset={isPresetParameter}
 										/>
 									);
 								})}
@@ -432,9 +541,43 @@ export const CreateWorkspacePageViewExperimental: FC<
 	);
 };
 
-const styles = {
-	description: (theme) => ({
-		fontSize: 13,
-		color: theme.palette.text.secondary,
-	}),
-} satisfies Record<string, Interpolation<Theme>>;
+interface DiagnosticsProps {
+	diagnostics: PreviewParameter["diagnostics"];
+}
+
+const Diagnostics: FC<DiagnosticsProps> = ({ diagnostics }) => {
+	return (
+		<div className="flex flex-col gap-4">
+			{diagnostics.map((diagnostic, index) => (
+				<div
+					key={`diagnostic-${diagnostic.summary}-${index}`}
+					className={`text-xs flex flex-col rounded-md border px-4 pb-3 border-solid
+                        ${
+													diagnostic.severity === "error"
+														? " text-content-destructive border-border-destructive"
+														: " text-content-warning border-border-warning"
+												}`}
+				>
+					<div className="flex items-center m-0">
+						{diagnostic.severity === "error" && (
+							<CircleAlert
+								className="me-2 -mt-0.5 inline-flex opacity-80"
+								size={16}
+								aria-hidden="true"
+							/>
+						)}
+						{diagnostic.severity === "warning" && (
+							<TriangleAlert
+								className="me-2 -mt-0.5 inline-flex opacity-80"
+								size={16}
+								aria-hidden="true"
+							/>
+						)}
+						<p className="font-medium">{diagnostic.summary}</p>
+					</div>
+					{diagnostic.detail && <p className="m-0 pb-0">{diagnostic.detail}</p>}
+				</div>
+			))}
+		</div>
+	);
+};

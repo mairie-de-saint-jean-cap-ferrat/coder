@@ -257,7 +257,7 @@ export const IdpOrgSyncPageView: FC<IdpSyncPageViewProps> = ({
 									className="min-w-60 max-w-3xl"
 									value={coderOrgs}
 									onChange={setCoderOrgs}
-									defaultOptions={organizations.map((org) => ({
+									options={organizations.map((org) => ({
 										label: org.display_name,
 										value: org.id,
 									}))}
@@ -456,7 +456,7 @@ const OrganizationRow: FC<OrganizationRowProps> = ({
 	);
 };
 
-export const AssignDefaultOrgHelpTooltip: FC = () => {
+const AssignDefaultOrgHelpTooltip: FC = () => {
 	return (
 		<HelpTooltip>
 			<HelpTooltipTrigger />
@@ -469,5 +469,3 @@ export const AssignDefaultOrgHelpTooltip: FC = () => {
 		</HelpTooltip>
 	);
 };
-
-export default IdpOrgSyncPageView;

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/pprof"
 	"net/url"
@@ -25,7 +26,6 @@ import (
 	"cdr.dev/slog/sloggers/slogjson"
 	"cdr.dev/slog/sloggers/slogstackdriver"
 	"github.com/coder/coder/v2/agent"
-	"github.com/coder/coder/v2/agent/agentcontainers"
 	"github.com/coder/coder/v2/agent/agentexec"
 	"github.com/coder/coder/v2/agent/agentssh"
 	"github.com/coder/coder/v2/agent/reaper"
@@ -318,13 +318,10 @@ func (r *RootCmd) workspaceAgent() *serpent.Command {
 				return xerrors.Errorf("create agent execer: %w", err)
 			}
 
-			var containerLister agentcontainers.Lister
-			if !experimentalDevcontainersEnabled {
-				logger.Info(ctx, "agent devcontainer detection not enabled")
-				containerLister = &agentcontainers.NoopLister{}
-			} else {
+			if experimentalDevcontainersEnabled {
 				logger.Info(ctx, "agent devcontainer detection enabled")
-				containerLister = agentcontainers.NewDocker(execer)
+			} else {
+				logger.Info(ctx, "agent devcontainer detection not enabled")
 			}
 
 			agnt := agent.New(agent.Options{
@@ -353,7 +350,6 @@ func (r *RootCmd) workspaceAgent() *serpent.Command {
 				PrometheusRegistry: prometheusRegistry,
 				BlockFileTransfer:  blockFileTransfer,
 				Execer:             execer,
-				ContainerLister:    containerLister,
 
 				ExperimentalDevcontainersEnabled: experimentalDevcontainersEnabled,
 			})
@@ -491,8 +487,6 @@ func (r *RootCmd) workspaceAgent() *serpent.Command {
 }
 
 func ServeHandler(ctx context.Context, logger slog.Logger, handler http.Handler, addr, name string) (closeFunc func()) {
-	logger.Debug(ctx, "http server listening", slog.F("addr", addr), slog.F("name", name))
-
 	// ReadHeaderTimeout is purposefully not enabled. It caused some issues with
 	// websockets over the dev tunnel.
 	// See: https://github.com/coder/coder/pull/3730
@@ -502,9 +496,15 @@ func ServeHandler(ctx context.Context, logger slog.Logger, handler http.Handler,
 		Handler: handler,
 	}
 	go func() {
-		err := srv.ListenAndServe()
-		if err != nil && !xerrors.Is(err, http.ErrServerClosed) {
-			logger.Error(ctx, "http server listen", slog.F("name", name), slog.Error(err))
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			logger.Error(ctx, "http server listen", slog.F("name", name), slog.F("addr", addr), slog.Error(err))
+			return
+		}
+		defer ln.Close()
+		logger.Info(ctx, "http server listening", slog.F("addr", ln.Addr()), slog.F("name", name))
+		if err := srv.Serve(ln); err != nil && !xerrors.Is(err, http.ErrServerClosed) {
+			logger.Error(ctx, "http server serve", slog.F("addr", ln.Addr()), slog.F("name", name), slog.Error(err))
 		}
 	}()
 

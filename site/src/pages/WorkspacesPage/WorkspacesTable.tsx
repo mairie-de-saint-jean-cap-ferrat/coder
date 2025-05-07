@@ -1,15 +1,14 @@
-import { useTheme } from "@emotion/react";
 import KeyboardArrowRight from "@mui/icons-material/KeyboardArrowRight";
 import Star from "@mui/icons-material/Star";
 import Checkbox from "@mui/material/Checkbox";
 import Skeleton from "@mui/material/Skeleton";
-import Table from "@mui/material/Table";
-import TableBody from "@mui/material/TableBody";
-import TableCell from "@mui/material/TableCell";
-import TableContainer from "@mui/material/TableContainer";
-import TableHead from "@mui/material/TableHead";
-import TableRow from "@mui/material/TableRow";
-import { visuallyHidden } from "@mui/utils";
+import { templateVersion } from "api/queries/templates";
+import {
+	cancelBuild,
+	deleteWorkspace,
+	startWorkspace,
+	stopWorkspace,
+} from "api/queries/workspaces";
 import type {
 	Template,
 	Workspace,
@@ -19,23 +18,65 @@ import type {
 import { Avatar } from "components/Avatar/Avatar";
 import { AvatarData } from "components/Avatar/AvatarData";
 import { AvatarDataSkeleton } from "components/Avatar/AvatarDataSkeleton";
+import { Button } from "components/Button/Button";
 import { InfoTooltip } from "components/InfoTooltip/InfoTooltip";
+import { Spinner } from "components/Spinner/Spinner";
 import { Stack } from "components/Stack/Stack";
+import {
+	StatusIndicator,
+	StatusIndicatorDot,
+	type StatusIndicatorProps,
+} from "components/StatusIndicator/StatusIndicator";
+import {
+	Table,
+	TableBody,
+	TableCell,
+	TableHead,
+	TableHeader,
+	TableRow,
+} from "components/Table/Table";
 import {
 	TableLoaderSkeleton,
 	TableRowSkeleton,
 } from "components/TableLoader/TableLoader";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipProvider,
+	TooltipTrigger,
+} from "components/Tooltip/Tooltip";
+import dayjs from "dayjs";
+import relativeTime from "dayjs/plugin/relativeTime";
+import { useAuthenticated } from "hooks";
 import { useClickableTableRow } from "hooks/useClickableTableRow";
+import { BanIcon, PlayIcon, RefreshCcwIcon, SquareIcon } from "lucide-react";
 import { useDashboard } from "modules/dashboard/useDashboard";
 import { WorkspaceAppStatus } from "modules/workspaces/WorkspaceAppStatus/WorkspaceAppStatus";
 import { WorkspaceDormantBadge } from "modules/workspaces/WorkspaceDormantBadge/WorkspaceDormantBadge";
 import { WorkspaceOutdatedTooltip } from "modules/workspaces/WorkspaceOutdatedTooltip/WorkspaceOutdatedTooltip";
-import { WorkspaceStatusBadge } from "modules/workspaces/WorkspaceStatusBadge/WorkspaceStatusBadge";
-import { LastUsed } from "pages/WorkspacesPage/LastUsed";
-import { type FC, type ReactNode, useMemo } from "react";
+import {
+	WorkspaceUpdateDialogs,
+	useWorkspaceUpdate,
+} from "modules/workspaces/WorkspaceUpdateDialogs";
+import { abilitiesByWorkspaceStatus } from "modules/workspaces/actions";
+import {
+	type FC,
+	type PropsWithChildren,
+	type ReactNode,
+	useMemo,
+} from "react";
+import { useMutation, useQuery, useQueryClient } from "react-query";
 import { useNavigate } from "react-router-dom";
-import { getDisplayWorkspaceTemplateName } from "utils/workspace";
+import { cn } from "utils/cn";
+import {
+	type DisplayWorkspaceStatusType,
+	getDisplayWorkspaceStatus,
+	getDisplayWorkspaceTemplateName,
+	lastUsedMessage,
+} from "utils/workspace";
 import { WorkspacesEmpty } from "./WorkspacesEmpty";
+
+dayjs.extend(relativeTime);
 
 export interface WorkspacesTableProps {
 	workspaces?: readonly Workspace[];
@@ -47,6 +88,8 @@ export interface WorkspacesTableProps {
 	canCheckWorkspaces: boolean;
 	templates?: Template[];
 	canCreateTemplate: boolean;
+	onActionSuccess: () => Promise<void>;
+	onActionError: (error: unknown) => void;
 }
 
 export const WorkspacesTable: FC<WorkspacesTableProps> = ({
@@ -58,8 +101,9 @@ export const WorkspacesTable: FC<WorkspacesTableProps> = ({
 	canCheckWorkspaces,
 	templates,
 	canCreateTemplate,
+	onActionSuccess,
+	onActionError,
 }) => {
-	const theme = useTheme();
 	const dashboard = useDashboard();
 	const workspaceIDToAppByStatus = useMemo(() => {
 		return (
@@ -96,213 +140,174 @@ export const WorkspacesTable: FC<WorkspacesTableProps> = ({
 	);
 
 	return (
-		<TableContainer>
-			<Table>
-				<TableHead>
+		<Table>
+			<TableHeader>
+				<TableRow>
+					<TableHead className={hasAppStatus ? "w-1/6" : "w-2/6"}>
+						<div className="flex items-center gap-2">
+							{canCheckWorkspaces && (
+								<Checkbox
+									className="-my-[9px]"
+									disabled={!workspaces || workspaces.length === 0}
+									checked={checkedWorkspaces.length === workspaces?.length}
+									size="xsmall"
+									onChange={(_, checked) => {
+										if (!workspaces) {
+											return;
+										}
+
+										if (!checked) {
+											onCheckChange([]);
+										} else {
+											onCheckChange(workspaces);
+										}
+									}}
+								/>
+							)}
+							Name
+						</div>
+					</TableHead>
+					{hasAppStatus && <TableHead className="w-2/6">Activity</TableHead>}
+					<TableHead className="w-2/6">Template</TableHead>
+					<TableHead className="w-2/6">Status</TableHead>
+					<TableHead className="w-0" />
+					<TableHead className="w-0" />
+				</TableRow>
+			</TableHeader>
+			<TableBody className="[&_td]:h-[72px]">
+				{!workspaces && <TableLoader canCheckWorkspaces={canCheckWorkspaces} />}
+				{workspaces && workspaces.length === 0 && (
 					<TableRow>
-						<TableCell width={hasAppStatus ? "30%" : "40%"}>
-							<div css={{ display: "flex", alignItems: "center", gap: 8 }}>
-								{canCheckWorkspaces && (
-									<Checkbox
-										// Remove the extra padding added for the first cell in the
-										// table
-										css={{
-											marginLeft: "-20px",
-											// MUI by default adds 9px padding to enhance the
-											// clickable area. We aim to prevent this from impacting
-											// the layout of surrounding elements.
-											marginTop: -9,
-											marginBottom: -9,
-										}}
-										disabled={!workspaces || workspaces.length === 0}
-										checked={checkedWorkspaces.length === workspaces?.length}
-										size="xsmall"
-										onChange={(_, checked) => {
-											if (!workspaces) {
-												return;
-											}
-
-											if (!checked) {
-												onCheckChange([]);
-											} else {
-												onCheckChange(workspaces);
-											}
-										}}
-									/>
-								)}
-								Name
-							</div>
+						<TableCell colSpan={999}>
+							<WorkspacesEmpty
+								templates={templates}
+								isUsingFilter={isUsingFilter}
+								canCreateTemplate={canCreateTemplate}
+							/>
 						</TableCell>
-						{hasAppStatus && <TableCell width="30%">Activity</TableCell>}
-						<TableCell width="25%">Template</TableCell>
-						<TableCell width="20%">Last used</TableCell>
-						<TableCell width="15%">Status</TableCell>
-						<TableCell width="1%" />
 					</TableRow>
-				</TableHead>
-				<TableBody>
-					{!workspaces && (
-						<TableLoader canCheckWorkspaces={canCheckWorkspaces} />
-					)}
-					{workspaces && workspaces.length === 0 && (
-						<WorkspacesEmpty
-							templates={templates}
-							isUsingFilter={isUsingFilter}
-							canCreateTemplate={canCreateTemplate}
-						/>
-					)}
-					{workspaces?.map((workspace) => {
-						const checked = checkedWorkspaces.some(
-							(w) => w.id === workspace.id,
-						);
-						const activeOrg = dashboard.organizations.find(
-							(o) => o.id === workspace.organization_id,
-						);
+				)}
+				{workspaces?.map((workspace) => {
+					const checked = checkedWorkspaces.some((w) => w.id === workspace.id);
+					const activeOrg = dashboard.organizations.find(
+						(o) => o.id === workspace.organization_id,
+					);
 
-						return (
-							<WorkspacesRow
-								workspace={workspace}
-								key={workspace.id}
-								checked={checked}
-							>
-								<TableCell>
-									<div css={{ display: "flex", alignItems: "center", gap: 8 }}>
-										{canCheckWorkspaces && (
-											<Checkbox
-												// Remove the extra padding added for the first cell in the
-												// table
-												css={{
-													marginLeft: "-20px",
-												}}
-												data-testid={`checkbox-${workspace.id}`}
-												size="xsmall"
-												disabled={cantBeChecked(workspace)}
-												checked={checked}
-												onClick={(e) => {
-													e.stopPropagation();
-												}}
-												onChange={(e) => {
-													if (e.currentTarget.checked) {
-														onCheckChange([...checkedWorkspaces, workspace]);
-													} else {
-														onCheckChange(
-															checkedWorkspaces.filter(
-																(w) => w.id !== workspace.id,
-															),
-														);
-													}
-												}}
-											/>
-										)}
-										<AvatarData
-											title={
-												<Stack
-													direction="row"
-													spacing={0.5}
-													alignItems="center"
-												>
-													{workspace.name}
-													{workspace.favorite && (
-														<Star css={{ width: 16, height: 16 }} />
-													)}
-													{workspace.outdated && (
-														<WorkspaceOutdatedTooltip
-															organizationName={workspace.organization_name}
-															templateName={workspace.template_name}
-															latestVersionId={
-																workspace.template_active_version_id
-															}
-															onUpdateVersion={() => {
-																onUpdateWorkspace(workspace);
-															}}
-														/>
-													)}
-												</Stack>
-											}
-											subtitle={
-												<div>
-													<span css={{ ...visuallyHidden }}>Owner: </span>
-													{workspace.owner_name}
-												</div>
-											}
-											avatar={
-												<Avatar
-													variant="icon"
-													src={workspace.template_icon}
-													fallback={workspace.name}
-													size="lg"
-												/>
-											}
-										/>
-									</div>
-								</TableCell>
-
-								{hasAppStatus && (
-									<TableCell>
-										<WorkspaceAppStatus
-											workspace={workspace}
-											agent={workspaceIDToAppByStatus[workspace.id]?.agent}
-											app={workspaceIDToAppByStatus[workspace.id]?.app}
-											status={workspace.latest_app_status}
-										/>
-									</TableCell>
-								)}
-
-								<TableCell>
-									<div>{getDisplayWorkspaceTemplateName(workspace)}</div>
-
-									{dashboard.showOrganizations && (
-										<div
-											css={{
-												fontSize: 13,
-												color: theme.palette.text.secondary,
-												lineHeight: 1.5,
+					return (
+						<WorkspacesRow
+							workspace={workspace}
+							key={workspace.id}
+							checked={checked}
+						>
+							<TableCell>
+								<div className="flex items-center gap-2">
+									{canCheckWorkspaces && (
+										<Checkbox
+											data-testid={`checkbox-${workspace.id}`}
+											size="xsmall"
+											disabled={cantBeChecked(workspace)}
+											checked={checked}
+											onClick={(e) => {
+												e.stopPropagation();
 											}}
-										>
-											<span css={{ ...visuallyHidden }}>Organization: </span>
-											{activeOrg?.display_name || workspace.organization_name}
-										</div>
+											onChange={(e) => {
+												if (e.currentTarget.checked) {
+													onCheckChange([...checkedWorkspaces, workspace]);
+												} else {
+													onCheckChange(
+														checkedWorkspaces.filter(
+															(w) => w.id !== workspace.id,
+														),
+													);
+												}
+											}}
+										/>
 									)}
-								</TableCell>
+									<AvatarData
+										title={
+											<Stack direction="row" spacing={0.5} alignItems="center">
+												{workspace.name}
+												{workspace.favorite && <Star className="w-4 h-4" />}
+												{workspace.outdated && (
+													<WorkspaceOutdatedTooltip
+														organizationName={workspace.organization_name}
+														templateName={workspace.template_name}
+														latestVersionId={
+															workspace.template_active_version_id
+														}
+														onUpdateVersion={() => {
+															onUpdateWorkspace(workspace);
+														}}
+													/>
+												)}
+											</Stack>
+										}
+										subtitle={
+											<div>
+												<span className="sr-only">Owner: </span>
+												{workspace.owner_name}
+											</div>
+										}
+										avatar={
+											<Avatar
+												src={workspace.owner_avatar_url}
+												fallback={workspace.owner_name}
+												size="lg"
+											/>
+										}
+									/>
+								</div>
+							</TableCell>
 
+							{hasAppStatus && (
 								<TableCell>
-									<LastUsed lastUsedAt={workspace.last_used_at} />
+									<WorkspaceAppStatus
+										workspace={workspace}
+										agent={workspaceIDToAppByStatus[workspace.id]?.agent}
+										app={workspaceIDToAppByStatus[workspace.id]?.app}
+										status={workspace.latest_app_status}
+									/>
 								</TableCell>
+							)}
 
-								<TableCell>
-									<div css={{ display: "flex", alignItems: "center", gap: 8 }}>
-										<WorkspaceStatusBadge workspace={workspace} />
-										{workspace.latest_build.status === "running" &&
-											!workspace.health.healthy && (
-												<InfoTooltip
-													type="warning"
-													title="Workspace is unhealthy"
-													message="Your workspace is running but some agents are unhealthy."
-												/>
-											)}
-										{workspace.dormant_at && (
-											<WorkspaceDormantBadge workspace={workspace} />
-										)}
-									</div>
-								</TableCell>
-
-								<TableCell>
-									<div css={{ display: "flex", paddingLeft: 16 }}>
-										<KeyboardArrowRight
-											css={{
-												color: theme.palette.text.secondary,
-												width: 20,
-												height: 20,
-											}}
+							<TableCell>
+								<AvatarData
+									title={getDisplayWorkspaceTemplateName(workspace)}
+									subtitle={
+										dashboard.showOrganizations && (
+											<>
+												<span className="sr-only">Organization:</span>{" "}
+												{activeOrg?.display_name || workspace.organization_name}
+											</>
+										)
+									}
+									avatar={
+										<Avatar
+											variant="icon"
+											src={workspace.template_icon}
+											fallback={getDisplayWorkspaceTemplateName(workspace)}
+											size="lg"
 										/>
-									</div>
-								</TableCell>
-							</WorkspacesRow>
-						);
-					})}
-				</TableBody>
-			</Table>
-		</TableContainer>
+									}
+								/>
+							</TableCell>
+
+							<WorkspaceStatusCell workspace={workspace} />
+							<WorkspaceActionsCell
+								workspace={workspace}
+								onActionSuccess={onActionSuccess}
+								onActionError={onActionError}
+							/>
+							<TableCell>
+								<div className="flex">
+									<KeyboardArrowRight className="text-content-secondary size-icon-sm" />
+								</div>
+							</TableCell>
+						</WorkspacesRow>
+					);
+				})}
+			</TableBody>
+		</Table>
 	);
 };
 
@@ -318,11 +323,10 @@ const WorkspacesRow: FC<WorkspacesRowProps> = ({
 	checked,
 }) => {
 	const navigate = useNavigate();
-	const theme = useTheme();
 
 	const workspacePageLink = `/@${workspace.owner_name}/${workspace.name}`;
 	const openLinkInNewTab = () => window.open(workspacePageLink, "_blank");
-	const clickableProps = useClickableTableRow({
+	const { role, hover, ...clickableProps } = useClickableTableRow({
 		onMiddleClick: openLinkInNewTab,
 		onClick: (event) => {
 			// Order of booleans actually matters here for Windows-Mac compatibility;
@@ -339,20 +343,14 @@ const WorkspacesRow: FC<WorkspacesRowProps> = ({
 		},
 	});
 
-	const bgColor = checked ? theme.palette.action.hover : undefined;
-
 	return (
 		<TableRow
 			{...clickableProps}
 			data-testid={`workspace-${workspace.id}`}
-			css={{
-				...clickableProps.css,
-				backgroundColor: bgColor,
-
-				"&:hover": {
-					backgroundColor: `${bgColor} !important`,
-				},
-			}}
+			className={cn([
+				checked ? "bg-muted hover:bg-muted" : undefined,
+				clickableProps.className,
+			])}
 		>
 			{children}
 		</TableRow>
@@ -367,25 +365,25 @@ const TableLoader: FC<TableLoaderProps> = ({ canCheckWorkspaces }) => {
 	return (
 		<TableLoaderSkeleton>
 			<TableRowSkeleton>
-				<TableCell width="40%">
-					<div css={{ display: "flex", alignItems: "center", gap: 8 }}>
-						{canCheckWorkspaces && (
-							<Checkbox size="small" disabled css={{ marginLeft: "-20px" }} />
-						)}
+				<TableCell className="w-2/6">
+					<div className="flex items-center gap-2">
+						{canCheckWorkspaces && <Checkbox size="small" disabled />}
 						<AvatarDataSkeleton />
 					</div>
 				</TableCell>
-				<TableCell>
-					<Skeleton variant="text" width="25%" />
+				<TableCell className="w-2/6">
+					<AvatarDataSkeleton />
+				</TableCell>
+				<TableCell className="w-2/6">
+					<Skeleton variant="text" width="50%" />
+				</TableCell>
+				<TableCell className="w-0">
+					<Skeleton variant="rounded" width={40} height={40} />
 				</TableCell>
 				<TableCell>
-					<Skeleton variant="text" width="25%" />
-				</TableCell>
-				<TableCell>
-					<Skeleton variant="text" width="25%" />
-				</TableCell>
-				<TableCell>
-					<Skeleton variant="text" width="25%" />
+					<div className="flex">
+						<KeyboardArrowRight className="text-content-disabled size-icon-sm" />
+					</div>
 				</TableCell>
 			</TableRowSkeleton>
 		</TableLoaderSkeleton>
@@ -394,4 +392,237 @@ const TableLoader: FC<TableLoaderProps> = ({ canCheckWorkspaces }) => {
 
 const cantBeChecked = (workspace: Workspace) => {
 	return ["deleting", "pending"].includes(workspace.latest_build.status);
+};
+
+type WorkspaceStatusCellProps = {
+	workspace: Workspace;
+};
+
+const variantByStatusType: Record<
+	DisplayWorkspaceStatusType,
+	StatusIndicatorProps["variant"]
+> = {
+	active: "pending",
+	inactive: "inactive",
+	success: "success",
+	error: "failed",
+	danger: "warning",
+	warning: "warning",
+};
+
+const WorkspaceStatusCell: FC<WorkspaceStatusCellProps> = ({ workspace }) => {
+	const { text, type } = getDisplayWorkspaceStatus(
+		workspace.latest_build.status,
+		workspace.latest_build.job,
+	);
+
+	return (
+		<TableCell>
+			<div className="flex flex-col">
+				<StatusIndicator variant={variantByStatusType[type]}>
+					<StatusIndicatorDot />
+					{text}
+					{workspace.latest_build.status === "running" &&
+						!workspace.health.healthy && (
+							<InfoTooltip
+								type="warning"
+								title="Workspace is unhealthy"
+								message="Your workspace is running but some agents are unhealthy."
+							/>
+						)}
+					{workspace.dormant_at && (
+						<WorkspaceDormantBadge workspace={workspace} />
+					)}
+				</StatusIndicator>
+				<span className="text-xs font-medium text-content-secondary ml-6">
+					{lastUsedMessage(workspace.last_used_at)}
+				</span>
+			</div>
+		</TableCell>
+	);
+};
+
+type WorkspaceActionsCellProps = {
+	workspace: Workspace;
+	onActionSuccess: () => Promise<void>;
+	onActionError: (error: unknown) => void;
+};
+
+const WorkspaceActionsCell: FC<WorkspaceActionsCellProps> = ({
+	workspace,
+	onActionSuccess,
+	onActionError,
+}) => {
+	const { user } = useAuthenticated();
+
+	const queryClient = useQueryClient();
+	const abilities = abilitiesByWorkspaceStatus(workspace, {
+		canDebug: false,
+		isOwner: user.roles.find((role) => role.name === "owner") !== undefined,
+	});
+
+	const startWorkspaceOptions = startWorkspace(workspace, queryClient);
+	const startWorkspaceMutation = useMutation({
+		...startWorkspaceOptions,
+		onSuccess: async (build) => {
+			startWorkspaceOptions.onSuccess(build);
+			await onActionSuccess();
+		},
+		onError: onActionError,
+	});
+
+	const stopWorkspaceOptions = stopWorkspace(workspace, queryClient);
+	const stopWorkspaceMutation = useMutation({
+		...stopWorkspaceOptions,
+		onSuccess: async (build) => {
+			stopWorkspaceOptions.onSuccess(build);
+			await onActionSuccess();
+		},
+		onError: onActionError,
+	});
+
+	const cancelJobOptions = cancelBuild(workspace, queryClient);
+	const cancelBuildMutation = useMutation({
+		...cancelJobOptions,
+		onSuccess: async () => {
+			cancelJobOptions.onSuccess();
+			await onActionSuccess();
+		},
+		onError: onActionError,
+	});
+
+	const { data: latestVersion } = useQuery({
+		...templateVersion(workspace.template_active_version_id),
+		enabled: workspace.outdated,
+	});
+	const workspaceUpdate = useWorkspaceUpdate({
+		workspace,
+		latestVersion,
+		onSuccess: onActionSuccess,
+		onError: onActionError,
+	});
+
+	const deleteWorkspaceOptions = deleteWorkspace(workspace, queryClient);
+	const deleteWorkspaceMutation = useMutation({
+		...deleteWorkspaceOptions,
+		onSuccess: async (build) => {
+			deleteWorkspaceOptions.onSuccess(build);
+			await onActionSuccess();
+		},
+		onError: onActionError,
+	});
+
+	const isRetrying =
+		startWorkspaceMutation.isLoading ||
+		stopWorkspaceMutation.isLoading ||
+		deleteWorkspaceMutation.isLoading;
+
+	const retry = () => {
+		switch (workspace.latest_build.transition) {
+			case "start":
+				startWorkspaceMutation.mutate({});
+				break;
+			case "stop":
+				stopWorkspaceMutation.mutate({});
+				break;
+			case "delete":
+				deleteWorkspaceMutation.mutate({});
+				break;
+		}
+	};
+
+	return (
+		<TableCell>
+			<div className="flex gap-1 justify-end">
+				{abilities.actions.includes("start") && (
+					<PrimaryAction
+						onClick={() => startWorkspaceMutation.mutate({})}
+						isLoading={startWorkspaceMutation.isLoading}
+						label="Start workspace"
+					>
+						<PlayIcon />
+					</PrimaryAction>
+				)}
+
+				{abilities.actions.includes("updateAndStart") && (
+					<>
+						<PrimaryAction
+							onClick={workspaceUpdate.update}
+							isLoading={workspaceUpdate.isUpdating}
+							label="Update and start workspace"
+						>
+							<PlayIcon />
+						</PrimaryAction>
+						<WorkspaceUpdateDialogs {...workspaceUpdate.dialogs} />
+					</>
+				)}
+
+				{abilities.actions.includes("stop") && (
+					<PrimaryAction
+						onClick={() => {
+							stopWorkspaceMutation.mutate({});
+						}}
+						isLoading={stopWorkspaceMutation.isLoading}
+						label="Stop workspace"
+					>
+						<SquareIcon />
+					</PrimaryAction>
+				)}
+
+				{abilities.canCancel && (
+					<PrimaryAction
+						onClick={cancelBuildMutation.mutate}
+						isLoading={cancelBuildMutation.isLoading}
+						label="Cancel build"
+					>
+						<BanIcon />
+					</PrimaryAction>
+				)}
+
+				{abilities.actions.includes("retry") && (
+					<PrimaryAction
+						onClick={retry}
+						isLoading={isRetrying}
+						label="Retry build"
+					>
+						<RefreshCcwIcon />
+					</PrimaryAction>
+				)}
+			</div>
+		</TableCell>
+	);
+};
+
+type PrimaryActionProps = PropsWithChildren<{
+	onClick: () => void;
+	isLoading: boolean;
+	label: string;
+}>;
+
+const PrimaryAction: FC<PrimaryActionProps> = ({
+	onClick,
+	isLoading,
+	label,
+	children,
+}) => {
+	return (
+		<TooltipProvider>
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<Button
+						variant="outline"
+						size="icon-lg"
+						onClick={(e) => {
+							e.stopPropagation();
+							onClick();
+						}}
+					>
+						<Spinner loading={isLoading}>{children}</Spinner>
+						<span className="sr-only">{label}</span>
+					</Button>
+				</TooltipTrigger>
+				<TooltipContent>{label}</TooltipContent>
+			</Tooltip>
+		</TooltipProvider>
+	);
 };
